@@ -1,0 +1,2 @@
+# DigitalTwin_Powered_AI_for_Real-time_UrbanPlanning_and_Traffic_Management
+advanced solution designed to improve the efficiency of urban infrastructure by integrating real- time simulation with artificial intelligence. The system creates a virtual replica of a city using data from sources such as OpenStreetMap, traffic cameras, and historical datasets, enabling accurate modeling of real-world traffic conditions.
