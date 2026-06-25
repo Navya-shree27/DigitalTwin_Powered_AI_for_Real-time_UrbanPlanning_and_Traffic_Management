@@ -1,0 +1,81 @@
+.map-view-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-base);
+}
+.map-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* Overlays */
+.map-overlay-tl {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.map-chip {
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid var(--border-default);
+  border-radius: 99px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  backdrop-filter: blur(8px);
+}
+.map-chip-issue {
+  border-color: var(--border-accent);
+  color: var(--accent-primary);
+}
+
+.map-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Fallback map */
+.map-fallback {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.map-fallback-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.map-fallback-center {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--text-primary);
+}
+
+@keyframes pulse-ring {
+  0%   { r: 8; opacity: 0.8; }
+  100% { r: 20; opacity: 0; }
+}
+.pulse-circle {
+  animation: pulse-ring 2s ease-out infinite;
+}

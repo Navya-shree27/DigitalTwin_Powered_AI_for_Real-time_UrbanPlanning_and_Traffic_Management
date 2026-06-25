@@ -1,0 +1,62 @@
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+*.whl
+
+# ─── Environment & Secrets ────────────────────────────────────────────────────
+.env
+*.env.local
+*.env.*.local
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Node.js / Frontend ──────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── SUMO ─────────────────────────────────────────────────────────────────────
+data/raw/osm/*.pbf
+data/raw/osm/*.osm
+data/processed/network/*.net.xml
+*.sumocfg.bak
+
+# ─── Logs & Temp ──────────────────────────────────────────────────────────────
+logs/
+*.log
+tmp/
+.tmp/
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ─── OSMnx / GeoPandas cache ──────────────────────────────────────────────────
+data/cache/

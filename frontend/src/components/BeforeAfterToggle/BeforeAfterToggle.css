@@ -1,0 +1,42 @@
+.ba-panel {
+  padding: 14px 16px;
+  min-width: 380px;
+  max-width: 500px;
+}
+.ba-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+
+.prop-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  flex: 1;
+}
+.prop-select:focus { outline: none; border-color: var(--accent-primary); }
+
+/* Delta table */
+.ba-metrics { display: flex; flex-direction: column; gap: 6px; }
+.delta-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.delta-label { color: var(--text-muted); min-width: 80px; }
+.delta-values { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.delta-before { color: var(--text-muted); }
+.delta-arrow  { color: var(--text-muted); font-size: 10px; }
+.delta-after  { color: var(--text-primary); font-weight: 600; }
+.delta-pct { font-size: 11px; font-weight: 700; min-width: 44px; text-align: right; }
+.delta-pct.positive { color: var(--accent-success); }
+.delta-pct.negative { color: var(--accent-danger); }
+
+/* Verdict */
+.ba-verdict { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+.ba-score { font-size: 12px; color: var(--text-muted); }
+
+/* Baseline */
+.ba-baseline { display: flex; gap: 16px; align-items: flex-end; }
+.baseline-metric { display: flex; flex-direction: column; align-items: center; }
+.baseline-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent-primary); }
+.baseline-unit  { font-size: 10px; color: var(--text-muted); }
+.baseline-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 3px; }
+.ba-hint { font-size: 11px; color: var(--text-muted); align-self: center; flex: 1; text-align: right; }

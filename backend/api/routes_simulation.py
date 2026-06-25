@@ -1,0 +1,356 @@
+"""
+backend/api/routes_simulation.py
+──────────────────────────────────
+API routes for simulation management.
+
+Endpoints
+─────────
+  POST /api/scenarios                       — create a new scenario
+  GET  /api/scenarios                       — list all scenarios
+  GET  /api/scenarios/{scenario_id}         — get a single scenario
+  POST /api/scenarios/{scenario_id}/simulate — run baseline simulation
+  GET  /api/scenarios/{scenario_id}/runs    — list all runs for a scenario
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from backend.database.db_connector import get_db
+from backend.models.schema import Scenario, SimulationRun
+
+log = logging.getLogger("routes_simulation")
+router = APIRouter(prefix="/api/scenarios", tags=["Simulation"])
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+# ── Request / Response models ─────────────────────────────────────────────────
+
+class ScenarioCreate(BaseModel):
+    name: str = Field(..., description="Human-readable scenario name")
+    city: str = Field(
+        default="Davanagere, Karnataka, India",
+        description="Place name or city for OSM data download"
+    )
+    description: str = Field(default="")
+    force_rebuild: bool = Field(default=False, description="Force re-download of OSM data")
+
+
+class SimulateRequest(BaseModel):
+    engine: str = Field(default="synthetic", description="synthetic | sumo | cityflow")
+    duration_s: int = Field(default=3600, ge=60, le=86400)
+    seed: int = Field(default=42)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _load_network_meta() -> dict:
+    meta_path = ROOT / "data" / "processed" / "network" / "network_meta.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text())
+    return {}
+
+
+def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, scenario_id: int):
+    """Background task: run simulation + detection + proposals + persist."""
+    from backend.database.db_connector import SessionLocal
+    db = SessionLocal()
+    try:
+        run = db.query(SimulationRun).get(run_id)
+        if not run:
+            return
+        run.status = "running"
+        db.commit()
+
+        # ── Simulation ────────────────────────────────────────────────────────
+        from simulation.simulation_runner import run_simulation
+        telemetry = run_simulation(scenario_id=scenario_id, engine=engine, duration_s=duration_s, seed=seed)
+
+        # ── Metrics ───────────────────────────────────────────────────────────
+        from validation.metrics_calculator import compute_metrics
+        metrics = compute_metrics(telemetry)
+
+        # ── Issue detection ───────────────────────────────────────────────────
+        from agents.issue_detection.congestion_detector import detect_congestion
+        from agents.issue_detection.intersection_safety_analyzer import detect_unsafe_intersections
+        from agents.issue_detection.lane_utilization_analyzer import detect_lane_issues
+
+        all_issues = (
+            detect_congestion(telemetry) +
+            detect_unsafe_intersections(telemetry) +
+            detect_lane_issues(telemetry)
+        )
+
+        # ── Proposal generation ────────────────────────────────────────────────
+        from agents.proposal_generator.signal_timing_optimizer import generate_signal_proposals
+        from agents.proposal_generator.lane_change_recommender import generate_lane_proposals
+        from agents.proposal_generator.route_diversion_planner import generate_diversion_proposals
+
+        all_proposals = (
+            generate_signal_proposals(all_issues, telemetry) +
+            generate_lane_proposals(all_issues, telemetry) +
+            generate_diversion_proposals(all_issues, telemetry)
+        )
+
+        # ── LLM agent analysis ────────────────────────────────────────────────
+        try:
+            from agents.city_inspector_agent.llm_agent import CityInspectorAgent
+            scenario = db.query(Scenario).get(scenario_id)
+            agent = CityInspectorAgent()
+            agent_result = agent.analyze(
+                scenario_id=scenario_id,
+                scenario_name=scenario.name if scenario else "Unknown",
+                telemetry=telemetry,
+                issues=all_issues,
+            )
+        except Exception as e:
+            log.warning(f"LLM agent failed (non-critical): {e}")
+            agent_result = {"narrative": "Agent analysis unavailable.", "top_issues": []}
+
+        # ── Persist to DB ─────────────────────────────────────────────────────
+        from backend.models.schema import Issue, Proposal
+
+        # Update run record
+        run.status = "done"
+        run.finished_at = datetime.now(timezone.utc)
+        run.set_telemetry(telemetry)
+        run.avg_travel_time_s = metrics.get("avg_travel_time_s")
+        run.avg_wait_time_s   = metrics.get("avg_wait_time_s")
+        run.avg_speed_kph     = metrics.get("avg_speed_kph")
+        run.congestion_ratio  = metrics.get("congestion_ratio")
+        run.total_delay_s     = metrics.get("total_delay_s")
+        run.emissions_proxy   = metrics.get("emissions_proxy")
+        run.efficiency_score  = metrics.get("efficiency_score")
+        run.throughput_index  = metrics.get("throughput_index")
+        if hasattr(run, "noise_pollution_db"):
+            run.noise_pollution_db = metrics.get("noise_pollution_db")
+        db.add(run)
+
+        # Persist issues (cap at 200 to avoid DB bloat in Phase A)
+        for issue_data in all_issues[:200]:
+            issue = Issue(
+                run_id      = run_id,
+                issue_id    = issue_data["issue_id"],
+                type        = issue_data["type"],
+                subtype     = issue_data.get("subtype"),
+                severity    = issue_data["severity"],
+                description = issue_data.get("description", ""),
+                location_json = json.dumps(issue_data.get("location", {})),
+                metrics_json  = json.dumps(issue_data.get("metrics", {})),
+            )
+            db.add(issue)
+
+        # Persist proposals (cap at 50)
+        for prop_data in all_proposals[:50]:
+            proposal = Proposal(
+                run_id      = run_id,
+                proposal_id = prop_data["proposal_id"],
+                type        = prop_data["type"],
+                subtype     = prop_data.get("subtype"),
+                description = prop_data.get("description", ""),
+                parameters_json  = json.dumps(prop_data.get("parameters", {})),
+                improvement_json = json.dumps(prop_data.get("expected_improvement", {})),
+            )
+            db.add(proposal)
+
+        db.commit()
+        log.info(f"Pipeline complete: run {run_id} — {len(all_issues)} issues, {len(all_proposals)} proposals.")
+
+    except Exception as e:
+        log.error(f"Pipeline failed for run {run_id}: {e}", exc_info=True)
+        run = db.query(SimulationRun).get(run_id)
+        if run:
+            run.status = "failed"
+            db.commit()
+    finally:
+        db.close()
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.post("", status_code=201)
+def create_scenario(body: ScenarioCreate, db: Session = Depends(get_db)) -> dict:
+    """Create a new scenario and trigger OSM data download."""
+    from simulation.osm_to_network import build_network
+    meta = build_network(city=body.city, force_rebuild=body.force_rebuild)
+
+    scenario = Scenario(
+        name        = body.name,
+        city        = body.city,
+        description = body.description,
+        bbox_north  = meta.get("bbox", {}).get("north"),
+        bbox_south  = meta.get("bbox", {}).get("south"),
+        bbox_east   = meta.get("bbox", {}).get("east"),
+        bbox_west   = meta.get("bbox", {}).get("west"),
+        n_nodes     = meta.get("nodes"),
+        n_edges     = meta.get("edges"),
+    )
+    db.add(scenario)
+    db.commit()
+    db.refresh(scenario)
+    log.info(f"Created scenario {scenario.id}: {scenario.name}")
+    return {"scenario": scenario.to_dict(), "network_meta": meta}
+
+
+@router.get("")
+def list_scenarios(db: Session = Depends(get_db)) -> dict:
+    scenarios = db.query(Scenario).order_by(Scenario.created_at.desc()).all()
+    return {"scenarios": [s.to_dict() for s in scenarios]}
+
+
+@router.get("/{scenario_id}")
+def get_scenario(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+    return {"scenario": scenario.to_dict()}
+
+
+@router.post("/{scenario_id}/simulate", status_code=202)
+def simulate(
+    scenario_id: int,
+    body: SimulateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Start a baseline simulation run for the scenario (async)."""
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    run = SimulationRun(
+        scenario_id = scenario_id,
+        engine      = body.engine,
+        duration_s  = body.duration_s,
+        seed        = body.seed,
+        status      = "pending",
+        is_baseline = True,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    background_tasks.add_task(
+        _run_full_pipeline,
+        run_id=run.id, engine=body.engine,
+        duration_s=body.duration_s, seed=body.seed,
+        scenario_id=scenario_id,
+    )
+    log.info(f"Simulation run {run.id} queued for scenario {scenario_id}.")
+    return {"run": run.to_dict(), "message": "Simulation started in background."}
+
+
+@router.get("/{scenario_id}/runs")
+def list_runs(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+    runs = db.query(SimulationRun).filter(SimulationRun.scenario_id == scenario_id).all()
+    return {"runs": [r.to_dict() for r in runs]}
+
+
+class SignalOverride(BaseModel):
+    node_id: int
+    green_s: int = Field(..., ge=10, le=120)
+    amber_s: int = Field(default=3, ge=2, le=5)
+    red_s: int = Field(..., ge=10, le=120)
+
+
+class CustomConfigValidationRequest(BaseModel):
+    overrides: list[SignalOverride]
+
+
+@router.post("/{scenario_id}/test-custom-config")
+def test_custom_config(
+    scenario_id: int,
+    body: CustomConfigValidationRequest,
+    db: Session = Depends(get_db)
+) -> dict:
+    """
+    Runs a custom simulation with user-defined signal timings.
+    Does not modify database records. Simulates and returns comparison deltas.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    # Get baseline telemetry from latest done run
+    from backend.api.routes_dashboard import _latest_done_run
+    baseline_run = _latest_done_run(scenario_id, db)
+    if not baseline_run:
+        raise HTTPException(400, "Please run a baseline simulation first.")
+
+    # Translate overrides to applied proposals format
+    apply_proposals = []
+    for override in body.overrides:
+        # Webster split comparison simulation
+        import math
+        opt_green = 35.0  # reference green split
+        diff = abs(override.green_s - opt_green) / opt_green
+        reduction = 35.0 * math.exp(-3.0 * diff)
+
+        apply_proposals.append({
+            "type": "signal_timing",
+            "location": {
+                "node_id": override.node_id
+            },
+            "expected_improvement": {
+                "expected_wait_reduction_pct": float(reduction)
+            }
+        })
+
+    # Run the custom simulation
+    from simulation.simulation_runner import run_simulation
+    custom_telemetry = run_simulation(
+        scenario_id=scenario_id,
+        engine=baseline_run.engine,
+        duration_s=baseline_run.duration_s,
+        seed=baseline_run.seed,
+        apply_proposals=apply_proposals
+    )
+
+    # Compute custom metrics
+    from validation.metrics_calculator import compute_metrics
+    custom_metrics = compute_metrics(custom_telemetry)
+
+    baseline_metrics = {
+        "avg_travel_time_s": baseline_run.avg_travel_time_s,
+        "avg_wait_time_s":   baseline_run.avg_wait_time_s,
+        "avg_speed_kph":     baseline_run.avg_speed_kph,
+        "congestion_ratio":  baseline_run.congestion_ratio,
+        "total_delay_s":     baseline_run.total_delay_s,
+        "emissions_proxy":   baseline_run.emissions_proxy,
+        "efficiency_score":  baseline_run.efficiency_score,
+        "noise_pollution_db": getattr(baseline_run, "noise_pollution_db", 0.0) or 0.0,
+    }
+
+    # Generate comparative deltas
+    deltas = {}
+    for k, val in custom_metrics.items():
+        if k in baseline_metrics and val is not None and baseline_metrics[k] is not None:
+            base_val = baseline_metrics[k]
+            diff_val = val - base_val
+            pct_val = (diff_val / max(base_val, 1) * 100) if base_val != 0 else 0
+            deltas[k] = {
+                "before": round(base_val, 2),
+                "after":  round(val, 2),
+                "diff":   round(diff_val, 2),
+                "pct":    round(pct_val, 1)
+            }
+
+    return {
+        "scenario_id": scenario_id,
+        "metrics":     custom_metrics,
+        "deltas":      deltas,
+        "telemetry":   custom_telemetry
+    }
