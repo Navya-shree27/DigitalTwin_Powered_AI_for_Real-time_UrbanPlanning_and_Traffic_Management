@@ -19,6 +19,10 @@ export default function Dashboard() {
   const [error, setError]                 = useState(null)
   const [showNewScenario, setShowNewScenario] = useState(false)
 
+  // Panel Toggles
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
+
   // Sandbox State
   const [editMode, setEditMode]           = useState(false)
   const [selectedNode, setSelectedNode]   = useState(null)
@@ -175,7 +179,23 @@ export default function Dashboard() {
             </div>
           )}
           {!simRunning && activeScenarioId && (
-            <div className="flex gap-2" style={{ display: 'flex', gap: '8px' }}>
+            <div className="flex gap-2" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                className={`btn btn-ghost panel-toggle-btn ${leftSidebarOpen ? 'active' : ''}`}
+                onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
+                title="Toggle Left Metrics Panel"
+                style={{ fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, padding: 0 }}
+              >
+                📊
+              </button>
+              <button
+                className={`btn btn-ghost panel-toggle-btn ${rightSidebarOpen ? 'active' : ''}`}
+                onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+                title="Toggle Right Sandbox Panel"
+                style={{ fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, padding: 0 }}
+              >
+                🛠️
+              </button>
               <button
                 className="btn btn-primary"
                 onClick={handleRunSimulation}
@@ -219,7 +239,7 @@ export default function Dashboard() {
       {/* ── Main layout ────────────────────────────────────────────────── */}
       <div className="dashboard-body">
         {/* Left sidebar */}
-        <aside className="sidebar-left">
+        <aside className={`sidebar-left ${leftSidebarOpen ? 'open' : 'collapsed'}`}>
           <div className="sidebar-section">
             <div className="sidebar-section-header">
               <span className="sidebar-section-title">Network Overview</span>
@@ -284,6 +304,9 @@ export default function Dashboard() {
             selectedNode={selectedNode}
             onSelectNode={setSelectedNode}
             editMode={editMode}
+            customTelemetry={customSimResult?.telemetry}
+            leftSidebarOpen={leftSidebarOpen}
+            rightSidebarOpen={rightSidebarOpen}
           />
 
           {/* Before/after overlay */}
@@ -306,7 +329,7 @@ export default function Dashboard() {
 
         {/* Right sidebar */}
         {isReady && (
-          <aside className="sidebar-right">
+          <aside className={`sidebar-right ${rightSidebarOpen ? 'open' : 'collapsed'}`}>
             {!editMode ? (
               <div className="sidebar-section">
                 <div className="sidebar-section-header">

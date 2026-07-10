@@ -60,6 +60,10 @@ class TestDashboardAPI:
         r = client.get("/api/dashboard/1/geojson/network")
         assert r.status_code in (200, 404)   # 200 if network.geojson exists from prior run
 
+    def test_get_nonexistent_telemetry(self, client):
+        r = client.get("/api/dashboard/99999/telemetry")
+        assert r.status_code == 404
+
 
 class TestProposalsAPI:
     def test_get_nonexistent_proposal(self, client):

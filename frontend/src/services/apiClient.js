@@ -66,6 +66,8 @@ export const dashboardApi = {
     api.get(`/dashboard/${scenarioId}/geojson/network`),
   getNodesGeoJson: (scenarioId) =>
     api.get(`/dashboard/${scenarioId}/geojson/nodes`),
+  getTelemetry: (scenarioId) =>
+    api.get(`/dashboard/${scenarioId}/telemetry`),
 }
 
 // ── Proposals ─────────────────────────────────────────────────────────────────

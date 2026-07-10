@@ -233,3 +233,13 @@ def get_nodes_geojson(scenario_id: int) -> FileResponse:
         media_type="application/geo+json",
         filename="nodes.geojson",
     )
+
+
+@router.get("/api/dashboard/{scenario_id}/telemetry")
+def get_telemetry(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    """Get the telemetry of the latest completed run of the scenario."""
+    run = _latest_done_run(scenario_id, db)
+    if not run:
+        raise HTTPException(404, f"No completed run for scenario {scenario_id}.")
+    return run.get_telemetry()
+

@@ -12,13 +12,17 @@
 /* Overlays */
 .map-overlay-tl {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 20px;
+  left: 20px;
   z-index: 5;
   display: flex;
   flex-direction: column;
   gap: 6px;
   pointer-events: none;
+  transition: left 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.map-overlay-tl.sidebar-open {
+  left: calc(var(--sidebar-width) + 40px);
 }
 .map-chip {
   background: rgba(17, 24, 39, 0.9);
@@ -79,3 +83,150 @@
 .pulse-circle {
   animation: pulse-ring 2s ease-out infinite;
 }
+
+/* Traffic Visualizer Control Panel */
+.map-overlay-tr {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 5;
+  transition: right 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.map-overlay-tr.sidebar-open {
+  right: calc(var(--sidebar-width) + 40px);
+}
+
+.traffic-control-panel {
+  padding: 16px;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(28, 28, 30, 0.72) !important;
+  backdrop-filter: blur(32px) saturate(190%) !important;
+  border-radius: var(--radius-md);
+}
+
+.traffic-control-panel .panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.traffic-control-panel .panel-title .icon {
+  font-size: 16px;
+}
+
+.traffic-control-panel .panel-title h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.traffic-control-panel .toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 12px;
+  user-select: none;
+}
+
+.traffic-control-panel .toggle-container input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.traffic-control-panel .toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.traffic-control-panel .panel-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.traffic-control-panel .control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.traffic-control-panel .control-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.traffic-control-panel .control-group input[type="range"] {
+  width: 100%;
+  height: 4px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  accent-color: var(--accent-primary);
+  outline: none;
+  cursor: pointer;
+  border: none;
+}
+
+.traffic-control-panel .legend-container {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.traffic-control-panel .legend-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.traffic-control-panel .legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.traffic-control-panel .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.traffic-control-panel .legend-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.traffic-control-panel .legend-item .dot-free {
+  background: #10b981;
+}
+
+.traffic-control-panel .legend-item .dot-moderate {
+  background: #f59e0b;
+}
+
+.traffic-control-panel .legend-item .dot-heavy {
+  background: #ef4444;
+}
+

@@ -266,8 +266,20 @@ def save_geojson(G: nx.MultiDiGraph, path: Path) -> None:
 
 def save_nodes_geojson(G: nx.MultiDiGraph, path: Path) -> None:
     """Save nodes as GeoJSON (point geometries) for intersection markers."""
-    gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False)
-    gdf_nodes = gdf_nodes.reset_index()[["osmid", "geometry", "street_count"]]
+    gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False).reset_index()
+    cols = ["osmid", "geometry", "street_count"]
+    if "highway" in gdf_nodes.columns:
+        cols.append("highway")
+    gdf_nodes = gdf_nodes[cols]
+
+    # Stringify list-valued columns
+    for col in gdf_nodes.columns:
+        if col == "geometry":
+            continue
+        gdf_nodes[col] = gdf_nodes[col].apply(
+            lambda x: x[0] if isinstance(x, list) else x
+        )
+
     gdf_nodes.to_file(str(path), driver="GeoJSON")
     log.info(f"Saved nodes GeoJSON → {path}")
 

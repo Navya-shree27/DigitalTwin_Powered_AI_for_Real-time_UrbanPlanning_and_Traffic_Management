@@ -23,6 +23,18 @@
         "congestion_ratio": 0.1931,
         "severe_issues": 3768
       }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 3,
+      "timestamp": "2026-07-09T21:42:28.922950+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: MODERATE\n\u2022 Average speed: 28.2 km/h | Average wait: 2.9s\n\u2022 Congestion ratio: 19.4% (8879 congested edges)\n\u2022 Severe issues detected: 3697\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1690250001_5306415337_0 (primary). Sim\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 28.24,
+        "avg_travel_time_s": 26.56,
+        "congestion_ratio": 0.1937,
+        "severe_issues": 3697
+      }
     }
   ]
 }
