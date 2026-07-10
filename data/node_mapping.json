@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Aruna Theatre Junction",
+    "osmid": 571395243,
+    "lat": 14.4678344,
+    "lon": 75.9145766,
+    "street_count": 4
+  },
+  {
+    "name": "Vidyarthi Bhavan Junction",
+    "osmid": 571407773,
+    "lat": 14.4592308,
+    "lon": 75.9198481,
+    "street_count": 3
+  },
+  {
+    "name": "Mothi Circle (PB Road)",
+    "osmid": 1470841066,
+    "lat": 14.4643372,
+    "lon": 75.9176024,
+    "street_count": 3
+  },
+  {
+    "name": "Gandhi Circle",
+    "osmid": 1465243476,
+    "lat": 14.4653704,
+    "lon": 75.922686,
+    "street_count": 3
+  },
+  {
+    "name": "District Court Junction",
+    "osmid": 1822610272,
+    "lat": 14.4623246,
+    "lon": 75.9202939,
+    "street_count": 3
+  },
+  {
+    "name": "8th Main / PB Road Signal",
+    "osmid": 1782305061,
+    "lat": 14.4638584,
+    "lon": 75.9155572,
+    "street_count": 3
+  },
+  {
+    "name": "KSRTC Bus Stand Junction",
+    "osmid": 2702258541,
+    "lat": 14.4675753,
+    "lon": 75.915759,
+    "street_count": 3
+  },
+  {
+    "name": "Vinobanagar Circle",
+    "osmid": 1782236061,
+    "lat": 14.4555871,
+    "lon": 75.9149393,
+    "street_count": 3
+  },
+  {
+    "name": "SBI / Collector Office",
+    "osmid": 1464736528,
+    "lat": 14.4639857,
+    "lon": 75.9199356,
+    "street_count": 3
+  },
+  {
+    "name": "Anjaneya Temple Road",
+    "osmid": 1782269831,
+    "lat": 14.460602,
+    "lon": 75.9220397,
+    "street_count": 3
+  }
+]

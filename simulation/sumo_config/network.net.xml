@@ -1,5 +1,3 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- SUMO road network stub -->
-<net version="1.16" junctionIDs="" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
-    <location netOffset="0.00,0.00" convBoundary="0.00,0.00,1000.00,1000.00" origBoundary="-1000.00,-1000.00,2000.00,2000.00" projParameter="!"/>
-</net>
+version https://git-lfs.github.com/spec/v1
+oid sha256:2f457b55551e015cf647a66977d23c0a1daa05e4f5722feb00dc6444ab23fa05
+size 123742985

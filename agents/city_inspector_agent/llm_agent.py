@@ -185,7 +185,7 @@ class CityInspectorAgent:
             if self.anthropic_key:
                 self.provider = "anthropic"
             else:
-                self.provider = "ollama"
+                self.provider = "rule-based"
 
         self._client = None
         if self.provider == "anthropic" and self.anthropic_key and _ANTHROPIC_AVAILABLE:
@@ -227,7 +227,7 @@ class CityInspectorAgent:
                 "stream": False
             }
             try:
-                response = requests.post(url, json=payload, timeout=60)
+                response = requests.post(url, json=payload, timeout=3)
                 response.raise_for_status()
                 result = response.json()
                 return result["message"]["content"]

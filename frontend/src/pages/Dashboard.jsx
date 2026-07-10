@@ -138,6 +138,7 @@ export default function Dashboard() {
   const issues      = dashboardData?.top_issues || []
   const proposals   = dashboardData?.top_proposals || []
   const scenario    = dashboardData?.scenario
+  const agentNarrative = dashboardData?.run?.agent_narrative
 
   return (
     <div className="dashboard-root">
@@ -178,7 +179,7 @@ export default function Dashboard() {
               <span>Simulation running…</span>
             </div>
           )}
-          {!simRunning && activeScenarioId && (
+          {activeScenarioId && (
             <div className="flex gap-2" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
                 className={`btn btn-ghost panel-toggle-btn ${leftSidebarOpen ? 'active' : ''}`}
@@ -196,26 +197,30 @@ export default function Dashboard() {
               >
                 🛠️
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleRunSimulation}
-                id="btn-run-simulation"
-                disabled={loading}
-              >
-                {hasRun ? '▶ Re-simulate' : '▶ Run Simulation'}
-              </button>
-              {hasRun && (
-                <button
-                  className={`btn ${editMode ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => {
-                    setEditMode(!editMode)
-                    setSelectedNode(null)
-                    setCustomSimResult(null)
-                  }}
-                  id="btn-toggle-edit-mode"
-                >
-                  {editMode ? '⚙️ Exit Sandbox' : '🛠️ Signal Sandbox'}
-                </button>
+              {!simRunning && (
+                <>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleRunSimulation}
+                    id="btn-run-simulation"
+                    disabled={loading}
+                  >
+                    {hasRun ? '▶ Re-simulate' : '▶ Run Simulation'}
+                  </button>
+                  {hasRun && (
+                    <button
+                      className={`btn ${editMode ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => {
+                        setEditMode(!editMode)
+                        setSelectedNode(null)
+                        setCustomSimResult(null)
+                      }}
+                      id="btn-toggle-edit-mode"
+                    >
+                      {editMode ? '⚙️ Exit Sandbox' : '🛠️ Signal Sandbox'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -238,8 +243,32 @@ export default function Dashboard() {
 
       {/* ── Main layout ────────────────────────────────────────────────── */}
       <div className="dashboard-body">
+        {/* Left sidebar toggle handle when collapsed */}
+        {!leftSidebarOpen && (
+          <button 
+            className="floating-toggle-btn toggle-left-floating"
+            onClick={() => setLeftSidebarOpen(true)}
+            title="Expand left panel"
+          >
+            ▶
+          </button>
+        )}
+
+        {/* Left sidebar collapse handle when open (direct sibling to avoid overflow clipping) */}
+        {leftSidebarOpen && (
+          <button 
+            className="sidebar-collapse-handle handle-left-open"
+            onClick={() => setLeftSidebarOpen(false)}
+            title="Collapse left panel"
+            style={{ left: 'calc(var(--sidebar-width) + 20px)' }}
+          >
+            ◀
+          </button>
+        )}
+
         {/* Left sidebar */}
         <aside className={`sidebar-left ${leftSidebarOpen ? 'open' : 'collapsed'}`}>
+
           <div className="sidebar-section">
             <div className="sidebar-section-header">
               <span className="sidebar-section-title">Network Overview</span>
@@ -255,6 +284,29 @@ export default function Dashboard() {
               isReady={isReady}
             />
           </div>
+
+          {isReady && agentNarrative && (
+            <div className="sidebar-section">
+              <div className="sidebar-section-header">
+                <span className="sidebar-section-title">🤖 AI Agent Narrative</span>
+              </div>
+              <div 
+                className="glass-card" 
+                style={{ 
+                  padding: 14, 
+                  fontSize: 12, 
+                  lineHeight: 1.6, 
+                  color: 'var(--text-secondary)', 
+                  background: 'rgba(10, 132, 255, 0.05)', 
+                  border: '1px solid rgba(10, 132, 255, 0.15)', 
+                  borderRadius: 12,
+                  whiteSpace: 'pre-line'
+                }}
+              >
+                {agentNarrative}
+              </div>
+            </div>
+          )}
 
           {isReady && (
             <div className="sidebar-section sidebar-section-grow">
@@ -307,6 +359,7 @@ export default function Dashboard() {
             customTelemetry={customSimResult?.telemetry}
             leftSidebarOpen={leftSidebarOpen}
             rightSidebarOpen={rightSidebarOpen}
+            signalOverrides={signalOverrides}
           />
 
           {/* Before/after overlay */}
@@ -327,9 +380,32 @@ export default function Dashboard() {
           )}
         </main>
 
+        {/* Right sidebar toggle handle when collapsed */}
+        {!rightSidebarOpen && isReady && (
+          <button 
+            className="floating-toggle-btn toggle-right-floating"
+            onClick={() => setRightSidebarOpen(true)}
+            title="Expand right panel"
+          >
+            ◀
+          </button>
+        )}
+        {/* Right sidebar collapse handle when open (direct sibling to avoid overflow clipping) */}
+        {rightSidebarOpen && isReady && (
+          <button 
+            className="sidebar-collapse-handle handle-right-open"
+            onClick={() => setRightSidebarOpen(false)}
+            title="Collapse right panel"
+            style={{ right: 'calc(var(--sidebar-width) + 20px)' }}
+          >
+            ▶
+          </button>
+        )}
+
         {/* Right sidebar */}
         {isReady && (
           <aside className={`sidebar-right ${rightSidebarOpen ? 'open' : 'collapsed'}`}>
+
             {!editMode ? (
               <div className="sidebar-section">
                 <div className="sidebar-section-header">

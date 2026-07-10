@@ -47,8 +47,8 @@ class ScenarioCreate(BaseModel):
 
 
 class SimulateRequest(BaseModel):
-    engine: str = Field(default="synthetic", description="synthetic | sumo | cityflow")
-    duration_s: int = Field(default=3600, ge=60, le=86400)
+    engine: str = Field(default="sumo", description="synthetic | sumo | cityflow")
+    duration_s: int = Field(default=300, ge=60, le=86400)
     seed: int = Field(default=42)
 
 
@@ -123,6 +123,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         # Update run record
         run.status = "done"
         run.finished_at = datetime.now(timezone.utc)
+        run.agent_narrative = agent_result.get("narrative") if "agent_result" in locals() else None
         run.set_telemetry(telemetry)
         run.avg_travel_time_s = metrics.get("avg_travel_time_s")
         run.avg_wait_time_s   = metrics.get("avg_wait_time_s")
@@ -304,6 +305,8 @@ def test_custom_config(
             "location": {
                 "node_id": override.node_id
             },
+            "green_s": float(override.green_s),
+            "yellow_s": float(override.amber_s),
             "expected_improvement": {
                 "expected_wait_reduction_pct": float(reduction)
             }

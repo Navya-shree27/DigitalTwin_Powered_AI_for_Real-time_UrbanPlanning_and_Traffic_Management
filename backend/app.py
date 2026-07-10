@@ -81,10 +81,67 @@ def on_startup() -> None:
     log.info("API docs: http://localhost:8000/docs")
 
 
-# ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"])
 def health() -> dict:
-    return {"status": "ok", "service": "digital-twin-traffic-ai"}
+    import shutil
+    import sys
+    
+    traci_import = False
+    traci_error = None
+    try:
+        import traci
+        traci_import = True
+    except Exception as e:
+        traci_error = str(e)
+        
+    osmnx_import = False
+    osmnx_error = None
+    try:
+        import osmnx as ox
+        osmnx_import = True
+    except Exception as e:
+        osmnx_error = str(e)
+        
+    sumo_bin = shutil.which("sumo")
+    sumo_gui_bin = shutil.which("sumo-gui")
+    
+    # Query database runs
+    from backend.database.db_connector import SessionLocal
+    from backend.models.schema import SimulationRun
+    db = SessionLocal()
+    runs_info = []
+    try:
+        runs = db.query(SimulationRun).order_by(SimulationRun.id.desc()).limit(5).all()
+        for r in runs:
+            runs_info.append({
+                "id": r.id,
+                "scenario_id": r.scenario_id,
+                "status": r.status,
+                "engine": r.engine,
+                "duration_s": r.duration_s,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "has_telemetry": r.telemetry_json is not None,
+                "avg_travel_time": r.avg_travel_time_s
+            })
+    except Exception as e:
+        runs_info = f"Query error: {e}"
+    finally:
+        db.close()
+    
+    return {
+        "status": "ok",
+        "service": "digital-twin-traffic-ai",
+        "python_version": sys.version,
+        "traci_available": traci_import,
+        "traci_error": traci_error,
+        "osmnx_available": osmnx_import,
+        "osmnx_error": osmnx_error,
+        "sumo_path": sumo_bin,
+        "sumo_gui_path": sumo_gui_bin,
+        "sumo_home_env": os.environ.get("SUMO_HOME"),
+        "recent_runs": runs_info
+    }
 
 
 @app.get("/", tags=["System"])

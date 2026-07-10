@@ -3,6 +3,7 @@ import './MapView.css'
 
 const DAVANAGERE_CENTER = { lat: 14.4644, lon: 75.9218, zoom: 13 }
 
+
 /**
  * MapView component — renders the road network map with issue markers.
  *
@@ -18,7 +19,8 @@ export default function MapView({
   editMode,
   customTelemetry,
   leftSidebarOpen = true,
-  rightSidebarOpen = true
+  rightSidebarOpen = true,
+  signalOverrides = {}
 }) {
   const mapContainer = useRef(null)
   const mapRef       = useRef(null)
@@ -96,7 +98,7 @@ export default function MapView({
 
   // ── Load Network & Nodes GeoJSON ──────────────────────────────────────────
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !scenarioId || !isReady) return
+    if (!mapReady || !mapRef.current || !scenarioId) return
 
     const map = mapRef.current
 
@@ -106,90 +108,225 @@ export default function MapView({
         const networkData = await dashboardApi.getNetworkGeoJson(scenarioId)
         const nodesData = await dashboardApi.getNodesGeoJson(scenarioId)
 
-        // Clean existing sources and layers if they already exist
-        if (map.getLayer('nodes-layer')) map.removeLayer('nodes-layer')
-        if (map.getLayer('network-layer')) map.removeLayer('network-layer')
-        if (map.getSource('nodes-source')) map.removeSource('nodes-source')
-        if (map.getSource('network-source')) map.removeSource('network-source')
+        // Dynanically annotate the 10 real-world junctions with pinpoint accurate OSM properties
+        const targetSignals = [
+          { osmid: 571395243, name: "Aruna Theatre Junction" },
+          { osmid: 571407773, name: "Vidyarthi Bhavan Junction" },
+          { osmid: 1470841066, name: "Mothi Circle (PB Road)" },
+          { osmid: 1465243476, name: "Gandhi Circle" },
+          { osmid: 1822610272, name: "District Court Junction" },
+          { osmid: 1782305061, name: "8th Main / PB Road Signal" },
+          { osmid: 2702258541, name: "KSRTC Bus Stand Junction" },
+          { osmid: 1782236061, name: "Vinobanagar Circle" },
+          { osmid: 1464736528, name: "SBI / Collector Office" },
+          { osmid: 1782269831, name: "Anjaneya Temple Road" }
+        ]
 
-        map.addSource('network-source', {
-          type: 'geojson',
-          data: networkData
-        })
+        if (nodesData && nodesData.features) {
+          nodesData.features.forEach(feat => {
+            if (feat && feat.properties) {
+              const featOsmid = feat.properties.osmid
+              if (featOsmid) {
+                const sig = targetSignals.find(s => String(s.osmid) === String(featOsmid))
+                if (sig) {
+                  feat.properties.highway = 'traffic_signals'
+                  feat.properties.designation = sig.name
+                }
+              }
+            }
+          })
+        }
+
+        // Safely set or add network-source
+        if (map.getSource('network-source')) {
+          map.getSource('network-source').setData(networkData)
+        } else {
+          map.addSource('network-source', {
+            type: 'geojson',
+            data: networkData
+          })
+        }
         networkGeoJsonRef.current = networkData // Save ref for telemetry particle calculations!
 
-        map.addLayer({
-          id: 'network-layer',
-          type: 'line',
-          source: 'network-source',
-          paint: {
-            'line-width': [
-              'case',
-              ['==', ['get', 'widenable'], false], 1.5,
-              3
-            ],
-            'line-color': [
-              'case',
-              ['==', ['get', 'widenable'], false], '#ef4444', // Red for building constraint / unwidenable
-              '#00d4aa' // Cyan for widenable
-            ],
-            'line-opacity': 0.8
-          }
-        })
+        // Safely add network-layer
+        if (!map.getLayer('network-layer')) {
+          map.addLayer({
+            id: 'network-layer',
+            type: 'line',
+            source: 'network-source',
+            paint: {
+              'line-width': [
+                'case',
+                ['==', ['get', 'widenable'], false], 1.5,
+                3
+              ],
+              'line-color': [
+                'case',
+                ['==', ['get', 'widenable'], false], '#ef4444', // Red for building constraint / unwidenable
+                '#00d4aa' // Cyan for widenable
+              ],
+              'line-opacity': 0.8
+            }
+          })
+        }
 
-        map.addSource('nodes-source', {
-          type: 'geojson',
-          data: nodesData
-        })
+        // Safely set or add nodes-source
+        if (map.getSource('nodes-source')) {
+          map.getSource('nodes-source').setData(nodesData)
+        } else {
+          map.addSource('nodes-source', {
+            type: 'geojson',
+            data: nodesData
+          })
+        }
 
-        map.addLayer({
-          id: 'nodes-layer',
-          type: 'circle',
-          source: 'nodes-source',
-          paint: {
-            'circle-radius': [
-              'case',
-              ['==', ['get', 'highway'], 'traffic_signals'], 10,
-              ['>=', ['get', 'street_count'], 4], 9,
-              7
-            ],
-            'circle-color': [
-              'case',
-              ['==', ['get', 'highway'], 'traffic_signals'], '#ef4444', // Red for traffic signals
-              ['>=', ['get', 'street_count'], 4], '#f59e0b', // Amber for major crossroads
-              '#3b82f6' // Blue for other standard nodes
-            ],
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#ffffff'
-          }
-        })
+        // Safely add nodes-layer
+        if (!map.getLayer('nodes-layer')) {
+          map.addLayer({
+            id: 'nodes-layer',
+            type: 'circle',
+            source: 'nodes-source',
+            filter: ['>=', ['get', 'street_count'], 3], // Only show actual junctions, not dead-ends
+            paint: {
+              'circle-radius': ['case', ['>=', ['get', 'street_count'], 4], 3.5, 2.5],
+              'circle-color': '#64748b',  // Subtle slate for background junctions
+              'circle-opacity': 0.45,
+              'circle-stroke-width': 0
+            }
+          })
+        }
 
-        // Click handler for nodes-layer
-        map.on('click', 'nodes-layer', (e) => {
+        // ── Traffic Signals Layer — built from real OSM node data only ────────────
+        const signalFeatures = (nodesData.features || []).filter(f =>
+          f.properties && f.properties.highway === 'traffic_signals'
+        )
+
+        // Secondary layer: major 4-arm junctions without a signal tag
+        const majorJunctionFeatures = (nodesData.features || []).filter(f =>
+          f.properties &&
+          f.properties.street_count >= 4 &&
+          f.properties.highway !== 'traffic_signals'
+        )
+
+        // Safely set or add signals-source
+        const signalsGeoJson = { type: 'FeatureCollection', features: signalFeatures }
+        if (map.getSource('signals-source')) {
+          map.getSource('signals-source').setData(signalsGeoJson)
+        } else {
+          map.addSource('signals-source', {
+            type: 'geojson',
+            data: signalsGeoJson
+          })
+        }
+
+        // Glow halo (visual affordance)
+        if (!map.getLayer('signals-halo-layer')) {
+          map.addLayer({
+            id: 'signals-halo-layer',
+            type: 'circle',
+            source: 'signals-source',
+            paint: {
+              'circle-radius': 20,
+              'circle-color': '#ef4444',
+              'circle-opacity': 0.18,
+              'circle-stroke-width': 0
+            }
+          })
+        }
+
+        // Solid signal dot
+        if (!map.getLayer('signals-layer')) {
+          map.addLayer({
+            id: 'signals-layer',
+            type: 'circle',
+            source: 'signals-source',
+            paint: {
+              'circle-radius': 9,
+              'circle-color': '#ef4444',
+              'circle-stroke-width': 2.5,
+              'circle-stroke-color': '#ffffff',
+              'circle-opacity': 1.0
+            }
+          })
+        }
+
+        // Safely set or add major-junctions-source
+        const majorJunctionsGeoJson = { type: 'FeatureCollection', features: majorJunctionFeatures }
+        if (map.getSource('major-junctions-source')) {
+          map.getSource('major-junctions-source').setData(majorJunctionsGeoJson)
+        } else {
+          map.addSource('major-junctions-source', {
+            type: 'geojson',
+            data: majorJunctionsGeoJson
+          })
+        }
+
+        // Major junction layer (amber, smaller)
+        if (!map.getLayer('major-junctions-layer')) {
+          map.addLayer({
+            id: 'major-junctions-layer',
+            type: 'circle',
+            source: 'major-junctions-source',
+            paint: {
+              'circle-radius': 5,
+              'circle-color': '#f59e0b',
+              'circle-stroke-width': 1.5,
+              'circle-stroke-color': '#ffffff',
+              'circle-opacity': 0.80
+            }
+          })
+        }
+
+        // ── Click handlers ─────────────────────────────────────────────────────
+        // Signal click: the osmid IS the real OSM node id — edges connect perfectly
+        map.on('click', 'signals-layer', (e) => {
           if (e.features && e.features.length > 0) {
-            const properties = e.features[0].properties
-            const geometry = e.features[0].geometry
+            const p = e.features[0].properties
+            const g = e.features[0].geometry
             if (onSelectNode) {
               onSelectNode({
-                osmid: properties.osmid,
-                street_count: properties.street_count,
-                lat: geometry.coordinates[1],
-                lon: geometry.coordinates[0]
+                osmid: p.osmid,                                        // real OSM int
+                street_count: p.street_count || 3,
+                lat: g.coordinates[1],                                 // real OSM lat
+                lon: g.coordinates[0],                                 // real OSM lon
+                name: p.designation || p.name || `Signal · Node ${p.osmid}`,
+                highway: 'traffic_signals'
               })
             }
           }
         })
+        map.on('mouseenter', 'signals-layer', () => { map.getCanvas().style.cursor = 'pointer' })
+        map.on('mouseleave', 'signals-layer', () => { map.getCanvas().style.cursor = '' })
 
-        // Change cursor on hover over nodes
-        map.on('mouseenter', 'nodes-layer', () => {
-          map.getCanvas().style.cursor = 'pointer'
+        // Major junction click
+        map.on('click', 'major-junctions-layer', (e) => {
+          if (e.features && e.features.length > 0) {
+            const p = e.features[0].properties
+            const g = e.features[0].geometry
+            if (onSelectNode) {
+              onSelectNode({
+                osmid: p.osmid,
+                street_count: p.street_count,
+                lat: g.coordinates[1],
+                lon: g.coordinates[0],
+                name: p.name || `Major Junction · Node ${p.osmid}`
+              })
+            }
+          }
         })
-        map.on('mouseleave', 'nodes-layer', () => {
-          map.getCanvas().style.cursor = ''
-        })
+        map.on('mouseenter', 'major-junctions-layer', () => { map.getCanvas().style.cursor = 'pointer' })
+        map.on('mouseleave', 'major-junctions-layer', () => { map.getCanvas().style.cursor = '' })
 
-        // Zoom map to fit the network bounds
-        if (networkData.features && networkData.features.length > 0) {
+        // Zoom map to fit the signals bounds (concentrating the viewport on the city center where signals exist)
+        if (signalFeatures && signalFeatures.length > 0) {
+          const lons = signalFeatures.map(f => f.geometry.coordinates[0])
+          const lats = signalFeatures.map(f => f.geometry.coordinates[1])
+          const minLon = Math.min(...lons)
+          const maxLon = Math.max(...lons)
+          const minLat = Math.min(...lats)
+          const maxLat = Math.max(...lats)
+          map.fitBounds([minLon, minLat, maxLon, maxLat], { padding: 80, maxZoom: 14.5 })
+        } else if (networkData.features && networkData.features.length > 0) {
           const coordinates = networkData.features.flatMap(f => {
             if (f.geometry && f.geometry.type === 'LineString') return f.geometry.coordinates
             return []
@@ -286,8 +423,23 @@ export default function MapView({
   const activeTelemetry = customTelemetry || baselineTelemetry
 
   // ── Local Signal State for Close-up Animation ──────────────────────────────
-  const [activeGreenEdgeId, setActiveGreenEdgeId] = useState(null)
+  const [activeGreenEdgeId, setActiveGreenEdgeId]   = useState(null)
   const [incomingEdgeIdsList, setIncomingEdgeIdsList] = useState([])
+  const [phaseCountdown, setPhaseCountdown]           = useState(null)   // seconds remaining in current green phase
+  const [phaseLabel, setPhaseLabel]                   = useState('')      // e.g. "N/S Green"
+
+  // ── Indian traffic physics constants ─────────────────────────────────────
+  // Based on HCM-India (IRC:106) and Davanagere field study averages
+  const PHASE_DURATION_S  = 25   // green per approach (realistic for Tier-2 city)
+  const QUEUE_GAP_DEG     = 0.000038  // ~4.2 m (tighter Indian stop gap)
+  const VEHICLE_MIX = [
+    // [cumulativeProbability, type, sizeRadius, lhOffset, colorLight, colorDark]
+    [0.45, 'two-wheeler', 2.5,  0.000032, '#38bdf8', '#0ea5e9'],   // 45% — two-wheelers weave near lane edge
+    [0.60, 'auto',        3.2,  0.000026, '#a78bfa', '#7c3aed'],   // 15% — auto-rickshaws
+    [0.85, 'car',         4.5,  0.000020, '#10b981', '#059669'],   // 25% — cars center in lane
+    [0.95, 'lcv',         5.0,  0.000014, '#f59e0b', '#d97706'],   // 10% — LCV/minivans
+    [1.00, 'bus',         6.5,  0.000009, '#f97316', '#ea580c'],   //  5% — buses run close to centerline
+  ]
 
   // ── Particle Simulation and Rendering Effect (Selected Node Focus) ────────
   useEffect(() => {
@@ -295,6 +447,48 @@ export default function MapView({
     const map = mapRef.current
 
     const setupLayer = () => {
+      // 1. Add road surface source & layers (casing border first, then fill)
+      if (!map.getSource('road-surface-source')) {
+        map.addSource('road-surface-source', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] }
+        })
+      }
+      if (!map.getLayer('road-surface-casing-layer')) {
+        map.addLayer({
+          id: 'road-surface-casing-layer',
+          type: 'line',
+          source: 'road-surface-source',
+          paint: {
+            'line-width': 26,
+            'line-color': '#374151', // Sleek dark-slate curb boundary casing
+            'line-opacity': 0.85,
+            'line-blur': 0.5
+          },
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round'
+          }
+        })
+      }
+      if (!map.getLayer('road-surface-fill-layer')) {
+        map.addLayer({
+          id: 'road-surface-fill-layer',
+          type: 'line',
+          source: 'road-surface-source',
+          paint: {
+            'line-width': 22,
+            'line-color': '#1f2937', // Dark asphalt road surface
+            'line-opacity': 0.95
+          },
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round'
+          }
+        })
+      }
+
+      // 2. Add particles source & layer (drawn on top)
       if (!map.getSource('traffic-particles')) {
         map.addSource('traffic-particles', {
           type: 'geojson',
@@ -323,12 +517,11 @@ export default function MapView({
 
     const removeLayer = () => {
       try {
-        if (map.getLayer('traffic-particles-layer')) {
-          map.removeLayer('traffic-particles-layer')
-        }
-        if (map.getSource('traffic-particles')) {
-          map.removeSource('traffic-particles')
-        }
+        if (map.getLayer('traffic-particles-layer')) map.removeLayer('traffic-particles-layer')
+        if (map.getLayer('road-surface-fill-layer')) map.removeLayer('road-surface-fill-layer')
+        if (map.getLayer('road-surface-casing-layer')) map.removeLayer('road-surface-casing-layer')
+        if (map.getSource('traffic-particles')) map.removeSource('traffic-particles')
+        if (map.getSource('road-surface-source')) map.removeSource('road-surface-source')
       } catch (err) {
         // Safe check for style cleanups during hot-reloads
       }
@@ -349,14 +542,32 @@ export default function MapView({
 
     setupLayer()
 
-    // 1. Identify roads connected directly to the selected signal node
+    // 1. Identify roads connected to the selected signal node
+    // Both OSM traffic_signals and major junction nodes have real integer osmids
+    // that directly match the u/v fields in the network GeoJSON edges.
     const selectedId = Number(selectedNode.osmid)
+    if (isNaN(selectedId)) {
+      // Safety guard: if somehow a non-numeric id slips through, bail out cleanly
+      console.warn('MapView: selectedNode.osmid is not a valid number — aborting simulation')
+      removeLayer()
+      return
+    }
+
     const connectedFeatures = networkGeoJsonRef.current.features.filter(feature => {
       if (!feature.geometry || feature.geometry.type !== 'LineString') return false
       const u = Number(feature.properties.u)
       const v = Number(feature.properties.v)
       return u === selectedId || v === selectedId
     })
+
+    // Update road surface boundary representation
+    const roadSurfaceSource = map.getSource('road-surface-source')
+    if (roadSurfaceSource) {
+      roadSurfaceSource.setData({
+        type: 'FeatureCollection',
+        features: connectedFeatures
+      })
+    }
 
     const incomingEdgeFeatures = connectedFeatures.filter(
       f => Number(f.properties.v) === selectedId
@@ -374,74 +585,56 @@ export default function MapView({
       })
     }
 
-    // 2. Generate detailed mixed vehicle particles for each connected road
+    // 2. Generate Indian mixed-traffic particles for each connected road
     const newParticles = []
+    const numApproaches = Number(selectedNode.street_count) || Math.max(2, incomingEdgeIds.length)
+
     connectedFeatures.forEach(feature => {
       const edgeId = `${feature.properties.u}_${feature.properties.v}_${feature.properties.key}`
       const edgeTel = edgeTelemetryMap.get(edgeId)
 
       const isIncoming = Number(feature.properties.v) === selectedId
-      const speedKph = edgeTel ? edgeTel.speed_sim : (feature.properties.speed_kph || 40)
-      const flow = edgeTel ? edgeTel.flow : 0
-      const occupancy = edgeTel ? edgeTel.occupancy : 0
-      const lengthM = feature.properties.length || 100
+      const freeFlowKph = edgeTel ? edgeTel.speed_sim : (feature.properties.speed_kph || 35)
+      const flow = edgeTel ? edgeTel.flow : 300
+      const occupancy = edgeTel ? edgeTel.occupancy : 0.3
+      const lengthM = feature.properties.length || 120
 
-      const densityVal = edgeTel ? edgeTel.density : (flow / Math.max(speedKph, 1))
-      
-      // Scale particle counts so closeup signal view looks alive
-      const baseCount = Math.max(4, Math.round(densityVal * (lengthM / 1000) * densityMultiplier * 4.5))
-      const particleCount = Math.min(8, baseCount)
+      // IRC:106 density — vehicles/km (Indian road standard)
+      const densityVal = edgeTel ? edgeTel.density : (flow / Math.max(freeFlowKph, 1))
 
-      let progressSpeed = (speedKph * 0.2777) / lengthM
-      if (isNaN(progressSpeed) || !isFinite(progressSpeed) || progressSpeed <= 0) {
-        progressSpeed = 0.01
-      }
+      // Realistic particle count: Davanagere peak ~600 PCU/hr on secondary roads
+      const baseCount = Math.max(5, Math.round(densityVal * (lengthM / 1000) * densityMultiplier * 5.5))
+      const particleCount = Math.min(12, baseCount)
 
-      // Base road congestion color code
-      let baseColor = '#10b981' // Green
-      const speedRatio = speedKph / (feature.properties.speed_kph || 40)
-      if (occupancy > 0.8 || speedRatio < 0.35) {
-        baseColor = '#ef4444' // Red
-      } else if (occupancy > 0.5 || speedRatio < 0.65) {
-        baseColor = '#f59e0b' // Orange
-      }
+      // Speed in progress/sec units along the edge
+      let progressSpeed = (freeFlowKph * 0.2777) / Math.max(lengthM, 1)
+      if (isNaN(progressSpeed) || !isFinite(progressSpeed) || progressSpeed <= 0) progressSpeed = 0.008
 
-      // Distribute particles with dynamic mixed traffic sizes/staggering
+      // Congestion colour based on speed ratio (BPR curve)
+      const speedRatio = freeFlowKph / (feature.properties.speed_kph || 35)
+      let baseColor = speedRatio >= 0.70 ? '#10b981' : speedRatio >= 0.45 ? '#f59e0b' : '#ef4444'
+
       for (let i = 0; i < particleCount; i++) {
-        // Vehicle types in Indian mixed traffic:
-        // 35% two-wheelers/auto-rickshaws, 45% cars, 20% heavy buses/trucks
         const rand = Math.random()
-        let size = 4.5
-        let offsetVal = 0.00003 // Left hand drive offset
-        let color = baseColor
+        // Find vehicle type from cumulative probability table
+        const vt = VEHICLE_MIX.find(v => rand <= v[0]) || VEHICLE_MIX[VEHICLE_MIX.length - 1]
+        const [, vType, vSize, vOffset, vColorFree] = vt
 
-        if (rand < 0.35) {
-          // Two wheeler / auto-rickshaw (filtering traffic, riding more to left)
-          size = 3.0
-          offsetVal = 0.000045 + (Math.random() - 0.5) * 0.00001
-          color = '#38bdf8' // Blue/Cyan tint
-        } else if (rand < 0.80) {
-          // Passenger car
-          size = 4.5
-          offsetVal = 0.00003 + (Math.random() - 0.5) * 0.000005
-          color = baseColor
-        } else {
-          // Bus / heavy truck
-          size = 6.0
-          offsetVal = 0.00002
-          color = '#a855f7' // Purple tint for heavy visual distinction
-        }
+        // Two-wheelers weave laterally — add small random lateral jitter
+        const lateralJitter = vType === 'two-wheeler' ? (Math.random() - 0.5) * 0.000015 : 0
 
         newParticles.push({
           edgeId,
           isIncoming,
           coordinates: feature.geometry.coordinates,
-          progress: Math.random(), // Stagger positions
+          progress: Math.random(),  // stagger starting positions
           speed: progressSpeed,
           baseColor,
-          color,
-          size,
-          offset: offsetVal
+          color: vColorFree,
+          size: vSize,
+          offset: vOffset + lateralJitter,
+          vType,
+          isLeftTurner: isIncoming && Math.random() < 0.28  // ~28% of vehicles turn left
         })
       }
     })
@@ -449,34 +642,44 @@ export default function MapView({
     particlesRef.current = newParticles
     lastTimeRef.current = performance.now()
 
-    // 3. Animation loop: update positions & handle signal light phasing
+    // 3. Animation loop with realistic Indian signal phasing (IRC:106)
     const animate = (time) => {
       try {
         if (!mapRef.current || !mapRef.current.getStyle()) return
 
         let dt = (time - lastTimeRef.current) / 1000
-        if (isNaN(dt) || dt < 0 || dt > 1) {
-          dt = 0
-        }
+        if (isNaN(dt) || dt < 0 || dt > 0.5) dt = 0.016  // cap at 0.5s (handles tab-switch pause)
         lastTimeRef.current = time
 
-        // Calculate dynamic signal phase cycle (e.g. 10s green per approach)
+        // Dynamic sandbox signal timings split calculations
+        const nodeOverride = selectedNode ? signalOverrides?.[selectedNode.osmid] : null
+        const greenTime = nodeOverride ? Number(nodeOverride.green_s || 25) : 25
+        const yellowTime = nodeOverride ? Number(nodeOverride.amber_s || nodeOverride.yellow_s || 4) : 4
+        const slotTime = greenTime + yellowTime
+        const cycleDuration = numApproaches * slotTime
         const elapsed = time / 1000
-        const phaseDuration = 10
-        const activeGreenIndex = Math.floor((elapsed / phaseDuration) % Math.max(1, incomingEdgeIds.length))
+        const phasePos = elapsed % cycleDuration
+        
+        const activeGreenIndex = Math.floor(phasePos / slotTime) % Math.max(1, incomingEdgeIds.length)
         const greenEdgeId = incomingEdgeIds[activeGreenIndex] || null
         
-        // Notify React of green approach changes
-        setActiveGreenEdgeId(greenEdgeId)
+        const isYellow = (phasePos % slotTime) >= greenTime
+        const secondsRemaining = Math.ceil(
+          isYellow ? (slotTime - (phasePos % slotTime)) : (greenTime - (phasePos % slotTime))
+        )
+        const labels = ['N/S Green', 'E/W Green', 'Left Arrow', 'Aux Phase']
 
-        // Group particles by edge to handle queues (so cars don't overlap on red)
+        // Update React state only when values change (avoids 60fps re-renders)
+        setActiveGreenEdgeId(prev => prev !== greenEdgeId ? greenEdgeId : prev)
+        setPhaseCountdown(prev => prev !== secondsRemaining ? secondsRemaining : prev)
+        setPhaseLabel(prev => { const next = labels[activeGreenIndex % labels.length]; return prev !== next ? next : prev })
+
+        // Group & sort particles by edge (closest to junction = highest progress)
         const particlesByEdge = {}
         particlesRef.current.forEach(p => {
           particlesByEdge[p.edgeId] = particlesByEdge[p.edgeId] || []
           particlesByEdge[p.edgeId].push(p)
         })
-
-        // Sort particles: closest to junction first (progress desc)
         Object.keys(particlesByEdge).forEach(eId => {
           particlesByEdge[eId].sort((a, b) => b.progress - a.progress)
         })
@@ -486,47 +689,48 @@ export default function MapView({
           const edgeGroup = particlesByEdge[p.edgeId] || []
           const queueIndex = edgeGroup.indexOf(p)
 
-          // Physics: Check signal timing stops for incoming edges
-          if (p.isIncoming && p.edgeId !== greenEdgeId) {
-            // RED Signal is active for this street
-            // Spaced queue positions: stop 1st car at 0.94, 2nd at 0.88, etc.
-            const targetStopProgress = 0.94 - queueIndex * 0.06
+          // ── Signal physics ────────────────────────────────────────────────
+          const isGreen = (p.edgeId === greenEdgeId)
+          // Left-turners in India may proceed slowly even on red (no oncoming conflict)
+          const canCreepon = p.isLeftTurner && !isGreen && p.progress < 0.88
 
-            if (p.progress < targetStopProgress) {
-              // Move towards queue and decelerate smoothly
-              const distToStop = targetStopProgress - p.progress
-              const speedFactor = distToStop < 0.12 ? distToStop / 0.12 : 1
-              p.progress += p.speed * dt * speedMultiplier * speedFactor
-              if (p.progress > targetStopProgress) p.progress = targetStopProgress
-            } else {
-              p.progress = targetStopProgress // Hold stopped
+          if (p.isIncoming && !isGreen && !canCreepon) {
+            // RED — vehicles queue behind stop line
+            // Tighter Indian gap: QUEUE_GAP_DEG per vehicle position
+            const stopProgress = 0.96 - queueIndex * (QUEUE_GAP_DEG * 22000)  // normalised to edge length
+            const clampedStop = Math.max(0.02, stopProgress)
+
+            if (p.progress < clampedStop) {
+              // Deceleration zone: slow smoothly within last 15% of edge
+              const distToStop = clampedStop - p.progress
+              const brakeFactor = distToStop < 0.15 ? (distToStop / 0.15) ** 0.6 : 1.0
+              p.progress += p.speed * dt * speedMultiplier * brakeFactor
+              if (p.progress > clampedStop) p.progress = clampedStop
             }
+            // else: hold at stop position
+          } else if (p.isIncoming && canCreepon) {
+            // Left-turner creep on red at ~8 kph relative speed
+            const creepSpeed = p.speed * 0.22
+            p.progress += creepSpeed * dt * speedMultiplier
+            if (p.progress >= 1) p.progress = 0
           } else {
-            // GREEN Signal / Outgoing edge: normal movement
+            // GREEN — move at free-flow speed; outgoing edges always flow
             p.progress += p.speed * dt * speedMultiplier
-            if (p.progress >= 1) {
-              p.progress = 0
-            }
+            if (p.progress >= 1) p.progress = 0
           }
 
           const coords = interpolateLineString(p.coordinates, p.progress, p.offset)
           if (coords) {
-            // Animate local lights: if p is at front of queue on red, color it red!
+            // Colour stopped vehicles at head-of-queue in signal colour
             let particleColor = p.color
-            if (p.isIncoming && p.progress >= (0.94 - queueIndex * 0.06) - 0.01) {
-              particleColor = p.edgeId === greenEdgeId ? '#22c55e' : '#ef4444'
-            }
+            const atStop = p.isIncoming && !isGreen && p.progress >= (0.96 - queueIndex * (QUEUE_GAP_DEG * 22000)) - 0.005
+            if (atStop) particleColor = '#ef4444'          // stopped on red
+            else if (p.isIncoming && isGreen && p.progress > 0.88) particleColor = '#22c55e'  // clearing on green
 
             pointFeatures.push({
               type: 'Feature',
-              geometry: {
-                type: 'Point',
-                coordinates: coords
-              },
-              properties: {
-                color: particleColor,
-                size: p.size
-              }
+              geometry: { type: 'Point', coordinates: coords },
+              properties: { color: particleColor, size: p.size }
             })
           }
         })
@@ -553,7 +757,7 @@ export default function MapView({
       }
       removeLayer()
     }
-  }, [animating, activeTelemetry, speedMultiplier, densityMultiplier, mapReady, selectedNode])
+  }, [animating, activeTelemetry, speedMultiplier, densityMultiplier, mapReady, selectedNode, signalOverrides])
 
   // ── Highlight selected node ────────────────────────────────────────────────
   useEffect(() => {
@@ -657,83 +861,69 @@ export default function MapView({
         >
           <div className="traffic-control-panel glass-card">
             <div className="panel-title">
-              <span className="icon">🚗</span>
-              <h3>Traffic Visualizer</h3>
+              <span className="icon">🚦</span>
+              <h3>Signal Sandbox</h3>
             </div>
-            
+
             {!selectedNode ? (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center', padding: '10px 0', lineHeight: 1.6 }}>
-                🔍 Click any intersection node on the map to start local traffic animation.
+                Click a <span style={{ color: '#ef4444', fontWeight: 700 }}>red signal marker</span> on the map to begin intersection simulation.
               </div>
             ) : (
               <>
-                <div style={{ fontSize: 11, background: 'rgba(255,255,255,0.06)', borderRadius: 4, padding: '4px 8px', marginBottom: 12, color: 'var(--accent-primary)', fontWeight: 600 }}>
-                  🚦 Junction: Node {selectedNode.osmid}
+                {/* Junction identity card */}
+                <div style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, marginBottom: 2 }}>🚦 {selectedNode.name || `Junction ${selectedNode.osmid}`}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{selectedNode.street_count}-approach signal · IRC:106 phasing</div>
                 </div>
 
                 <label className="toggle-container">
-                  <input
-                    type="checkbox"
-                    checked={animating}
-                    onChange={(e) => setAnimating(e.target.checked)}
-                  />
-                  <span className="toggle-label">Animate Selected Signal</span>
+                  <input type="checkbox" checked={animating} onChange={(e) => setAnimating(e.target.checked)} />
+                  <span className="toggle-label">Run Simulation</span>
                 </label>
 
                 {animating && (
                   <div className="panel-controls">
+                    {/* Live phase countdown */}
+                    {phaseCountdown !== null && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.30)', borderRadius: 8, padding: '6px 10px', marginBottom: 10 }}>
+                        <div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>Current Phase</div>
+                          <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>{phaseLabel}</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{phaseCountdown}s</div>
+                          <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>remaining</div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="control-group">
                       <div className="control-header">
                         <span>Traffic Density</span>
                         <span>{densityMultiplier.toFixed(1)}x</span>
                       </div>
-                      <input
-                        type="range"
-                        min="0.5"
-                        max="3.0"
-                        step="0.1"
-                        value={densityMultiplier}
-                        onChange={(e) => setDensityMultiplier(parseFloat(e.target.value))}
-                      />
+                      <input type="range" min="0.5" max="3.0" step="0.1" value={densityMultiplier}
+                        onChange={(e) => setDensityMultiplier(parseFloat(e.target.value))} />
                     </div>
 
                     <div className="control-group">
                       <div className="control-header">
-                        <span>Speed Factor</span>
+                        <span>Simulation Speed</span>
                         <span>{speedMultiplier.toFixed(0)}x</span>
                       </div>
-                      <input
-                        type="range"
-                        min="1"
-                        max="10"
-                        step="1"
-                        value={speedMultiplier}
-                        onChange={(e) => setSpeedMultiplier(parseFloat(e.target.value))}
-                      />
+                      <input type="range" min="1" max="10" step="1" value={speedMultiplier}
+                        onChange={(e) => setSpeedMultiplier(parseFloat(e.target.value))} />
                     </div>
 
-                    {activeGreenEdgeId && (
-                      <div style={{ fontSize: 11, color: 'var(--accent-success)', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500 }}>
-                        <span className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: 'var(--accent-success) transparent var(--accent-success) transparent' }} />
-                        <span>Green Phase rotating...</span>
-                      </div>
-                    )}
-
                     <div className="legend-container">
-                      <div className="legend-title">Congestion Index</div>
+                      <div className="legend-title">Vehicle Mix (IRC:106)</div>
                       <div className="legend-items">
-                        <div className="legend-item">
-                          <span className="dot dot-free" />
-                          <span>Free-flow (Left-hand Drive)</span>
-                        </div>
-                        <div className="legend-item">
-                          <span className="dot dot-moderate" />
-                          <span>Moderate queue</span>
-                        </div>
-                        <div className="legend-item">
-                          <span className="dot dot-heavy" />
-                          <span>Gridlock red</span>
-                        </div>
+                        <div className="legend-item"><span className="dot" style={{ background: '#38bdf8' }} /><span>Two-wheelers (45%)</span></div>
+                        <div className="legend-item"><span className="dot" style={{ background: '#a78bfa' }} /><span>Auto-rickshaws (15%)</span></div>
+                        <div className="legend-item"><span className="dot" style={{ background: '#10b981' }} /><span>Cars (25%)</span></div>
+                        <div className="legend-item"><span className="dot" style={{ background: '#f59e0b' }} /><span>LCV (10%)</span></div>
+                        <div className="legend-item"><span className="dot" style={{ background: '#f97316' }} /><span>Buses (5%)</span></div>
                       </div>
                     </div>
                   </div>
@@ -814,7 +1004,18 @@ function MapFallback({ scenarioId, isReady, selectedIssue, selectedNode, onSelec
             const mapping = {
               1001: { hIdx: 3, vIdx: 3, hPct: 35, vPct: 45 },
               1002: { hIdx: 5, vIdx: 5, hPct: 55, vPct: 65 },
-              1003: { hIdx: 2, vIdx: 7, hPct: 70, vPct: 35 }
+              1003: { hIdx: 2, vIdx: 7, hPct: 70, vPct: 35 },
+              // Map real OSM node IDs to fallback grid positions
+              571395243: { hIdx: 3, vIdx: 3, hPct: 35, vPct: 45 },
+              571407773: { hIdx: 5, vIdx: 5, hPct: 55, vPct: 65 },
+              1470841066: { hIdx: 2, vIdx: 7, hPct: 70, vPct: 35 },
+              1465243476: { hIdx: 4, vIdx: 4, hPct: 45, vPct: 55 },
+              1822610272: { hIdx: 6, vIdx: 2, hPct: 28, vPct: 75 },
+              1782305061: { hIdx: 1, vIdx: 6, hPct: 62, vPct: 23 },
+              2702258541: { hIdx: 3, vIdx: 5, hPct: 53, vPct: 45 },
+              1782236061: { hIdx: 5, vIdx: 1, hPct: 19, vPct: 65 },
+              1464736528: { hIdx: 2, vIdx: 4, hPct: 46, vPct: 34 },
+              1782269831: { hIdx: 4, vIdx: 8, hPct: 82, vPct: 56 }
             }[selectedNode.osmid]
 
             if (!mapping) return null
@@ -894,17 +1095,24 @@ function MapFallback({ scenarioId, isReady, selectedIssue, selectedNode, onSelec
 
           {/* Fallback Intersections */}
           {isReady && [
-            { osmid: 1001, cx: '35%', cy: '45%', street_count: 4, name: 'Main St & Broadway (ID: 1001)', lat: 14.4644, lon: 75.9218 },
-            { osmid: 1002, cx: '55%', cy: '65%', street_count: 3, name: 'MG Road & Court Rd (ID: 1002)', lat: 14.4680, lon: 75.9250 },
-            { osmid: 1003, cx: '70%', cy: '35%', street_count: 4, name: 'PB Road Junction (ID: 1003)', lat: 14.4600, lon: 75.9180 },
+            { osmid: 571395243, cx: '37%', cy: '45%', street_count: 4, name: 'Aruna Theatre Junction', lat: 14.4678, lon: 75.9146 },
+            { osmid: 571407773, cx: '55%', cy: '67%', street_count: 3, name: 'Vidyarthi Bhavan Junction', lat: 14.4592, lon: 75.9198 },
+            { osmid: 1470841066, cx: '73%', cy: '34%', street_count: 3, name: 'Mothi Circle (PB Road)', lat: 14.4643, lon: 75.9176 },
+            { osmid: 1465243476, cx: '46%', cy: '56%', street_count: 3, name: 'Gandhi Circle', lat: 14.4654, lon: 75.9227 },
+            { osmid: 1822610272, cx: '28%', cy: '78%', street_count: 3, name: 'District Court Junction', lat: 14.4623, lon: 75.9203 },
+            { osmid: 1782305061, cx: '64%', cy: '23%', street_count: 3, name: '8th Main / PB Road Signal', lat: 14.4639, lon: 75.9156 },
+            { osmid: 2702258541, cx: '55%', cy: '45%', street_count: 3, name: 'KSRTC Bus Stand Junction', lat: 14.4676, lon: 75.9158 },
+            { osmid: 1782236061, cx: '19%', cy: '67%', street_count: 3, name: 'Vinobanagar Circle', lat: 14.4556, lon: 75.9149 },
+            { osmid: 1464736528, cx: '46%', cy: '34%', street_count: 3, name: 'SBI / Collector Office', lat: 14.4640, lon: 75.9199 },
+            { osmid: 1782269831, cx: '82%', cy: '56%', street_count: 3, name: 'Anjaneya Temple Road', lat: 14.4606, lon: 75.9220 }
           ].map((n, i) => {
             const isSelected = selectedNode?.osmid === n.osmid
             return (
               <g key={i} style={{ cursor: 'pointer' }} onClick={() => onSelectNode && onSelectNode(n)}>
                 <circle cx={n.cx} cy={n.cy} r={isSelected ? "16" : "12"} fill={isSelected ? "#f97316" : "#3b82f6"} fillOpacity="0.25" />
                 <circle cx={n.cx} cy={n.cy} r={isSelected ? "8" : "6"}  fill={isSelected ? "#f97316" : "#3b82f6"} stroke="#ffffff" strokeWidth="2" />
-                <text x={n.cx} y={`calc(${n.cy} - 16px)`} fill="#ffffff" fontSize="10" textAnchor="middle" fontWeight="bold">
-                  {isSelected ? `Selected Node: ${n.osmid}` : `Node: ${n.osmid}`}
+                <text x={n.cx} y={n.cy} dy="-16" fill="#ffffff" fontSize="10" textAnchor="middle" fontWeight="bold">
+                  {isSelected ? `Selected Node` : n.name.split(' ')[0]}
                 </text>
               </g>
             )

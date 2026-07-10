@@ -39,8 +39,8 @@ export const scenariosApi = {
 
   simulate: (id, options = {}) =>
     api.post(`/scenarios/${id}/simulate`, {
-      engine:     options.engine || 'synthetic',
-      duration_s: options.duration || 3600,
+      engine:     options.engine || 'sumo',
+      duration_s: options.duration || 300,
       seed:       options.seed || 42,
     }),
 

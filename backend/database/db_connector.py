@@ -62,6 +62,10 @@ def init_db() -> None:
                 log.info("Migration: Adding noise_pollution_db column to simulation_runs table...")
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE simulation_runs ADD COLUMN noise_pollution_db FLOAT"))
+            if columns and "agent_narrative" not in columns:
+                log.info("Migration: Adding agent_narrative column to simulation_runs table...")
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE simulation_runs ADD COLUMN agent_narrative TEXT"))
     except Exception as e:
         log.warning(f"Failed to auto-migrate simulation_runs: {e}")
 

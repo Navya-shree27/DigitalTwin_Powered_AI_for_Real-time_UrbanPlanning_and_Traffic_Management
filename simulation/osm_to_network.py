@@ -265,14 +265,27 @@ def save_geojson(G: nx.MultiDiGraph, path: Path) -> None:
 
 
 def save_nodes_geojson(G: nx.MultiDiGraph, path: Path) -> None:
-    """Save nodes as GeoJSON (point geometries) for intersection markers."""
+    """Save nodes as GeoJSON (point geometries) for intersection markers.
+
+    Includes OSM tags that are needed by the frontend:
+      - osmid, geometry, street_count  — always present
+      - highway     — 'traffic_signals' for signalized intersections
+      - designation — named junction identifier (e.g. 'Aruna Theatre Junction')
+      - name        — fallback display name
+    """
     gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False).reset_index()
+
+    # Base columns always exported
     cols = ["osmid", "geometry", "street_count"]
-    if "highway" in gdf_nodes.columns:
-        cols.append("highway")
+
+    # Optional OSM tag columns — include if present in the dataset
+    for optional_col in ("highway", "designation", "name", "ref"):
+        if optional_col in gdf_nodes.columns:
+            cols.append(optional_col)
+
     gdf_nodes = gdf_nodes[cols]
 
-    # Stringify list-valued columns
+    # Stringify list-valued columns (OSMnx sometimes returns lists for multi-value tags)
     for col in gdf_nodes.columns:
         if col == "geometry":
             continue
@@ -281,7 +294,8 @@ def save_nodes_geojson(G: nx.MultiDiGraph, path: Path) -> None:
         )
 
     gdf_nodes.to_file(str(path), driver="GeoJSON")
-    log.info(f"Saved nodes GeoJSON → {path}")
+    log.info(f"Saved nodes GeoJSON → {path}  ({len(gdf_nodes)} nodes, "
+             f"{(gdf_nodes.get('highway', pd.Series()) == 'traffic_signals').sum()} traffic signals)")
 
 
 def save_metadata(G: nx.MultiDiGraph, path: Path, source: str) -> dict:

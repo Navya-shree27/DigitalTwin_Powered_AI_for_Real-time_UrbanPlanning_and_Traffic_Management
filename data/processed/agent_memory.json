@@ -36,5 +36,19 @@
         "severe_issues": 3697
       }
     }
+  ],
+  "2": [
+    {
+      "scenario_id": 2,
+      "cycle": 1,
+      "timestamp": "2026-07-10T05:40:44.217856+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
+      "key_metrics": {
+        "avg_speed_kph": 29.2,
+        "avg_travel_time_s": 25.66,
+        "congestion_ratio": 0.0,
+        "severe_issues": 0
+      }
+    }
   ]
 }

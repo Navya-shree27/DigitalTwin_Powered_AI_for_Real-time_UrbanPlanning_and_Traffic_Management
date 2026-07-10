@@ -75,8 +75,22 @@ def compute_metrics(telemetry: dict) -> dict:
     # Delay
     delays = np.maximum(travel_times - ff_tts, 0)
 
-    # Congestion
-    congested_mask   = occupancies > 0.75
+    # Congestion calculation based on custom formula:
+    # score = w1(delay) + w2(queue_length) + w3(stop_count) + w4(travel_time_unreliability)
+    w1, w2, w3, w4 = 0.3, 0.3, 0.2, 0.2
+    
+    # Delays (delay = simulated_tt - free_flow_tt)
+    edge_delays = np.maximum(travel_times - ff_tts, 0)
+    # Queue lengths
+    edge_queues = np.array([e.get("queue_length", 0) for e in edges])
+    # Stop count (estimated from wait_time)
+    edge_stops = wait_times / 20.0
+    # Travel time unreliability (variance proxy based on delays)
+    edge_unreliability = edge_delays * 1.2
+    
+    congestion_scores = (w1 * edge_delays) + (w2 * edge_queues) + (w3 * edge_stops) + (w4 * edge_unreliability)
+    
+    congested_mask   = (congestion_scores > 8.0) | (occupancies > 0.70)
     congested_count  = int(congested_mask.sum())
     congestion_ratio = congested_count / max(len(edges), 1)
 

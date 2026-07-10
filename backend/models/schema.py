@@ -89,6 +89,7 @@ class SimulationRun(Base):
     efficiency_score  = Column(Float, nullable=True)
     throughput_index  = Column(Float, nullable=True)
     noise_pollution_db = Column(Float, nullable=True)
+    agent_narrative   = Column(Text, nullable=True)
 
     # Full telemetry JSON (may be large — consider offloading to a file in Phase B)
     telemetry_json = Column(Text, nullable=True)
@@ -111,6 +112,7 @@ class SimulationRun(Base):
             "is_baseline": self.is_baseline,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "agent_narrative": self.agent_narrative,
             "metrics": {
                 "avg_travel_time_s": self.avg_travel_time_s,
                 "avg_wait_time_s":   self.avg_wait_time_s,
