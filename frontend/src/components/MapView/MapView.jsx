@@ -20,7 +20,8 @@ export default function MapView({
   customTelemetry,
   leftSidebarOpen = true,
   rightSidebarOpen = true,
-  signalOverrides = {}
+  signalOverrides = {},
+  simRunning = false
 }) {
   const mapContainer = useRef(null)
   const mapRef       = useRef(null)
@@ -31,6 +32,13 @@ export default function MapView({
   const [animating, setAnimating] = useState(false)
   const [speedMultiplier, setSpeedMultiplier] = useState(3)
   const [densityMultiplier, setDensityMultiplier] = useState(1.5)
+  const [cachedNetworkData, setCachedNetworkData] = useState(null)
+  const [cachedNodesData, setCachedNodesData] = useState(null)
+
+  useEffect(() => {
+    setCachedNetworkData(null)
+    setCachedNodesData(null)
+  }, [scenarioId])
 
   const networkGeoJsonRef = useRef(null)
   const particlesRef = useRef([])
@@ -101,12 +109,57 @@ export default function MapView({
     if (!mapReady || !mapRef.current || !scenarioId) return
 
     const map = mapRef.current
+    let active = true
+
+    const clearLayers = () => {
+      try {
+        if (map.getSource('network-source')) {
+          map.getSource('network-source').setData({ type: 'FeatureCollection', features: [] })
+        }
+        if (map.getSource('nodes-source')) {
+          map.getSource('nodes-source').setData({ type: 'FeatureCollection', features: [] })
+        }
+        if (map.getSource('signals-source')) {
+          map.getSource('signals-source').setData({ type: 'FeatureCollection', features: [] })
+        }
+      } catch (e) {
+        console.warn('Failed to clear map layers:', e)
+      }
+    }
 
     const loadGeoJson = async () => {
+      clearLayers()
       try {
-        const { dashboardApi } = await import('../../services/apiClient.js')
-        const networkData = await dashboardApi.getNetworkGeoJson(scenarioId)
-        const nodesData = await dashboardApi.getNodesGeoJson(scenarioId)
+        let networkData = cachedNetworkData
+        let nodesData = cachedNodesData
+
+        if (!networkData || !nodesData) {
+          const { dashboardApi } = await import('../../services/apiClient.js')
+          networkData = await dashboardApi.getNetworkGeoJson(scenarioId)
+          if (!active) return
+          nodesData = await dashboardApi.getNodesGeoJson(scenarioId)
+          if (!active) return
+          
+          setCachedNetworkData(networkData)
+          setCachedNodesData(nodesData)
+        }
+
+        // Deep/shallow copy features so we don't mutate the cached originals
+        const networkCopy = {
+          ...networkData,
+          features: networkData.features.map(f => ({
+            ...f,
+            properties: { ...f.properties }
+          }))
+        }
+        
+        const nodesCopy = {
+          ...nodesData,
+          features: nodesData.features.map(f => ({
+            ...f,
+            properties: { ...f.properties }
+          }))
+        }
 
         // Dynanically annotate the 10 real-world junctions with pinpoint accurate OSM properties
         const targetSignals = [
@@ -122,8 +175,8 @@ export default function MapView({
           { osmid: 1782269831, name: "Anjaneya Temple Road" }
         ]
 
-        if (nodesData && nodesData.features) {
-          nodesData.features.forEach(feat => {
+        if (nodesCopy && nodesCopy.features) {
+          nodesCopy.features.forEach(feat => {
             if (feat && feat.properties) {
               const featOsmid = feat.properties.osmid
               if (featOsmid) {
@@ -132,6 +185,41 @@ export default function MapView({
                   feat.properties.highway = 'traffic_signals'
                   feat.properties.designation = sig.name
                 }
+                
+                // Apply overrides in real-time
+                const override = signalOverrides[featOsmid]
+                if (override) {
+                  if (override.is_signal !== undefined) {
+                    feat.properties.highway = override.is_signal ? 'traffic_signals' : 'priority'
+                  }
+                  if (override.has_dustbin !== undefined) {
+                    feat.properties.has_dustbin = override.has_dustbin
+                  }
+                }
+              }
+            }
+          })
+        }
+
+        // Apply edge overrides
+        if (networkCopy && networkCopy.features) {
+          networkCopy.features.forEach(feat => {
+            if (feat && feat.properties) {
+              const u = feat.properties.u
+              const v = feat.properties.v
+              const overrideU = signalOverrides[u]
+              const overrideV = signalOverrides[v]
+              
+              if (overrideU && overrideU.lanes !== undefined && overrideU.lanes !== null) {
+                feat.properties.lanes = overrideU.lanes
+              } else if (overrideV && overrideV.lanes !== undefined && overrideV.lanes !== null) {
+                feat.properties.lanes = overrideV.lanes
+              }
+              
+              if (overrideU && overrideU.has_sidewalk !== undefined && overrideU.has_sidewalk !== null) {
+                feat.properties.has_sidewalk = overrideU.has_sidewalk
+              } else if (overrideV && overrideV.has_sidewalk !== undefined && overrideV.has_sidewalk !== null) {
+                feat.properties.has_sidewalk = overrideV.has_sidewalk
               }
             }
           })
@@ -139,14 +227,14 @@ export default function MapView({
 
         // Safely set or add network-source
         if (map.getSource('network-source')) {
-          map.getSource('network-source').setData(networkData)
+          map.getSource('network-source').setData(networkCopy)
         } else {
           map.addSource('network-source', {
             type: 'geojson',
-            data: networkData
+            data: networkCopy
           })
         }
-        networkGeoJsonRef.current = networkData // Save ref for telemetry particle calculations!
+        networkGeoJsonRef.current = networkCopy // Save ref for telemetry particle calculations!
 
         // Safely add network-layer
         if (!map.getLayer('network-layer')) {
@@ -156,9 +244,13 @@ export default function MapView({
             source: 'network-source',
             paint: {
               'line-width': [
-                'case',
-                ['==', ['get', 'widenable'], false], 1.5,
-                3
+                'match',
+                ['get', 'lanes'],
+                1, 2.0,
+                2, 3.5,
+                3, 5.0,
+                4, 6.5,
+                3.0 // default width
               ],
               'line-color': [
                 'case',
@@ -170,13 +262,29 @@ export default function MapView({
           })
         }
 
+        // Add sidewalk / footpath layer
+        if (!map.getLayer('sidewalk-layer')) {
+          map.addLayer({
+            id: 'sidewalk-layer',
+            type: 'line',
+            source: 'network-source',
+            filter: ['==', ['get', 'has_sidewalk'], true],
+            paint: {
+              'line-color': '#e2e8f0', // Light slate sidewalk
+              'line-width': 2.0,
+              'line-dasharray': [2, 2],
+              'line-offset': 6
+            }
+          })
+        }
+
         // Safely set or add nodes-source
         if (map.getSource('nodes-source')) {
-          map.getSource('nodes-source').setData(nodesData)
+          map.getSource('nodes-source').setData(nodesCopy)
         } else {
           map.addSource('nodes-source', {
             type: 'geojson',
-            data: nodesData
+            data: nodesCopy
           })
         }
 
@@ -186,6 +294,7 @@ export default function MapView({
             id: 'nodes-layer',
             type: 'circle',
             source: 'nodes-source',
+            minzoom: 14.5, // Only render when zoomed in to preserve performance on large cities
             filter: ['>=', ['get', 'street_count'], 3], // Only show actual junctions, not dead-ends
             paint: {
               'circle-radius': ['case', ['>=', ['get', 'street_count'], 4], 3.5, 2.5],
@@ -196,16 +305,26 @@ export default function MapView({
           })
         }
 
-        // ── Traffic Signals Layer — built from real OSM node data only ────────────
-        const signalFeatures = (nodesData.features || []).filter(f =>
-          f.properties && f.properties.highway === 'traffic_signals'
-        )
+        // Add dustbins POI symbol layer
+        if (!map.getLayer('dustbins-layer')) {
+          map.addLayer({
+            id: 'dustbins-layer',
+            type: 'symbol',
+            source: 'nodes-source',
+            minzoom: 14.0, // Only show trash symbols when zoomed in
+            filter: ['==', ['get', 'has_dustbin'], true],
+            layout: {
+              'text-field': '🗑️',
+              'text-size': 13,
+              'text-allow-overlap': true,
+              'text-offset': [0, -1.2]
+            }
+          })
+        }
 
-        // Secondary layer: major 4-arm junctions without a signal tag
-        const majorJunctionFeatures = (nodesData.features || []).filter(f =>
-          f.properties &&
-          f.properties.street_count >= 4 &&
-          f.properties.highway !== 'traffic_signals'
+        // ── Traffic Signals Layer — built from real OSM node data only ────────────
+        const signalFeatures = (nodesCopy.features || []).filter(f =>
+          f.properties && f.properties.highway === 'traffic_signals'
         )
 
         // Safely set or add signals-source
@@ -250,33 +369,6 @@ export default function MapView({
           })
         }
 
-        // Safely set or add major-junctions-source
-        const majorJunctionsGeoJson = { type: 'FeatureCollection', features: majorJunctionFeatures }
-        if (map.getSource('major-junctions-source')) {
-          map.getSource('major-junctions-source').setData(majorJunctionsGeoJson)
-        } else {
-          map.addSource('major-junctions-source', {
-            type: 'geojson',
-            data: majorJunctionsGeoJson
-          })
-        }
-
-        // Major junction layer (amber, smaller)
-        if (!map.getLayer('major-junctions-layer')) {
-          map.addLayer({
-            id: 'major-junctions-layer',
-            type: 'circle',
-            source: 'major-junctions-source',
-            paint: {
-              'circle-radius': 5,
-              'circle-color': '#f59e0b',
-              'circle-stroke-width': 1.5,
-              'circle-stroke-color': '#ffffff',
-              'circle-opacity': 0.80
-            }
-          })
-        }
-
         // ── Click handlers ─────────────────────────────────────────────────────
         // Signal click: the osmid IS the real OSM node id — edges connect perfectly
         map.on('click', 'signals-layer', (e) => {
@@ -297,25 +389,6 @@ export default function MapView({
         })
         map.on('mouseenter', 'signals-layer', () => { map.getCanvas().style.cursor = 'pointer' })
         map.on('mouseleave', 'signals-layer', () => { map.getCanvas().style.cursor = '' })
-
-        // Major junction click
-        map.on('click', 'major-junctions-layer', (e) => {
-          if (e.features && e.features.length > 0) {
-            const p = e.features[0].properties
-            const g = e.features[0].geometry
-            if (onSelectNode) {
-              onSelectNode({
-                osmid: p.osmid,
-                street_count: p.street_count,
-                lat: g.coordinates[1],
-                lon: g.coordinates[0],
-                name: p.name || `Major Junction · Node ${p.osmid}`
-              })
-            }
-          }
-        })
-        map.on('mouseenter', 'major-junctions-layer', () => { map.getCanvas().style.cursor = 'pointer' })
-        map.on('mouseleave', 'major-junctions-layer', () => { map.getCanvas().style.cursor = '' })
 
         // Zoom map to fit the signals bounds (concentrating the viewport on the city center where signals exist)
         if (signalFeatures && signalFeatures.length > 0) {
@@ -343,12 +416,18 @@ export default function MapView({
         }
 
       } catch (err) {
-        console.error('Failed to load GeoJSON onto MapLibre:', err)
+        if (active) {
+          console.error('Failed to load GeoJSON onto MapLibre:', err)
+        }
       }
     }
 
     loadGeoJson()
-  }, [mapReady, scenarioId, isReady])
+    return () => {
+      active = false
+      clearLayers()
+    }
+  }, [mapReady, scenarioId, isReady, signalOverrides, cachedNetworkData, cachedNodesData])
 
   // ── Fetch Baseline Telemetry ──────────────────────────────────────────────
   useEffect(() => {
@@ -421,6 +500,10 @@ export default function MapView({
   }
 
   const activeTelemetry = customTelemetry || baselineTelemetry
+
+  const nodeOverride = selectedNode ? signalOverrides?.[selectedNode.osmid] : null
+  const isNodeOriginallySignal = selectedNode?.highway === 'traffic_signals'
+  const nodeIsSignal = nodeOverride ? (nodeOverride.is_signal !== false) : isNodeOriginallySignal
 
   // ── Local Signal State for Close-up Animation ──────────────────────────────
   const [activeGreenEdgeId, setActiveGreenEdgeId]   = useState(null)
@@ -690,7 +773,7 @@ export default function MapView({
           const queueIndex = edgeGroup.indexOf(p)
 
           // ── Signal physics ────────────────────────────────────────────────
-          const isGreen = (p.edgeId === greenEdgeId)
+          const isGreen = !nodeIsSignal || (p.edgeId === greenEdgeId)
           // Left-turners in India may proceed slowly even on red (no oncoming conflict)
           const canCreepon = p.isLeftTurner && !isGreen && p.progress < 0.88
 
@@ -772,6 +855,9 @@ export default function MapView({
 
     if (!selectedNode) return
 
+    // Color selected node based on its is_signal override
+    const nodeColor = nodeIsSignal ? '#ef4444' : '#10b981'  // red = signal, green = priority
+
     map.addSource('selected-node-source', {
       type: 'geojson',
       data: {
@@ -789,14 +875,58 @@ export default function MapView({
       type: 'circle',
       source: 'selected-node-source',
       paint: {
-        'circle-radius': 13,
-        'circle-color': '#f97316',
+        'circle-radius': 14,
+        'circle-color': nodeColor,
         'circle-stroke-width': 3,
         'circle-stroke-color': '#ffffff',
         'circle-opacity': 0.95
       }
     })
-  }, [selectedNode, mapReady])
+  }, [selectedNode, mapReady, signalOverrides])
+
+  // ── Live override visual feedback — update signal dots for installed/removed signals ─
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    const overrideEntries = Object.entries(signalOverrides || {})
+
+    // Build a set of removed node IDs (is_signal === false) and installed node IDs (is_signal === true)
+    const removedIds = new Set(
+      overrideEntries.filter(([, v]) => v.is_signal === false).map(([k]) => Number(k))
+    )
+    const installedIds = new Set(
+      overrideEntries.filter(([, v]) => v.is_signal === true).map(([k]) => Number(k))
+    )
+
+    // Update the signals-layer opacity if source is loaded
+    try {
+      if (map.getLayer('signals-halo-layer')) {
+        map.setPaintProperty('signals-halo-layer', 'circle-opacity', [
+          'case',
+          ['in', ['get', 'osmid'], ['literal', [...removedIds]]],
+          0.05, // dimmed halo for removed signals
+          0.18  // normal opacity
+        ])
+      }
+      if (map.getLayer('signals-layer')) {
+        map.setPaintProperty('signals-layer', 'circle-color', [
+          'case',
+          ['in', ['get', 'osmid'], ['literal', [...removedIds]]],
+          '#6b7280', // gray for removed signal
+          '#ef4444'  // red for active signal
+        ])
+        map.setPaintProperty('signals-layer', 'circle-opacity', [
+          'case',
+          ['in', ['get', 'osmid'], ['literal', [...removedIds]]],
+          0.35,
+          1.0
+        ])
+      }
+    } catch (err) {
+      // Safe for rapid override changes
+    }
+  }, [signalOverrides, mapReady])
 
   // ── Fly to selected issue location ────────────────────────────────────────
   useEffect(() => {
@@ -872,9 +1002,24 @@ export default function MapView({
             ) : (
               <>
                 {/* Junction identity card */}
-                <div style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, marginBottom: 2 }}>🚦 {selectedNode.name || `Junction ${selectedNode.osmid}`}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{selectedNode.street_count}-approach signal · IRC:106 phasing</div>
+                <div style={{
+                  background: nodeIsSignal ? 'rgba(239,68,68,0.10)' : 'rgba(34,197,94,0.10)',
+                  border: `1px solid ${nodeIsSignal ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.25)'}`,
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  marginBottom: 12
+                }}>
+                  <div style={{
+                    fontSize: 11,
+                    color: nodeIsSignal ? '#ef4444' : '#22c55e',
+                    fontWeight: 700,
+                    marginBottom: 2
+                  }}>
+                    {nodeIsSignal ? '🚦' : '🟢'} {selectedNode.name || `Junction ${selectedNode.osmid}`}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    {selectedNode.street_count}-approach {nodeIsSignal ? 'signal · IRC:106 phasing' : 'priority intersection'}
+                  </div>
                 </div>
 
                 <label className="toggle-container">
@@ -885,7 +1030,7 @@ export default function MapView({
                 {animating && (
                   <div className="panel-controls">
                     {/* Live phase countdown */}
-                    {phaseCountdown !== null && (
+                    {phaseCountdown !== null && nodeIsSignal && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.30)', borderRadius: 8, padding: '6px 10px', marginBottom: 10 }}>
                         <div>
                           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>Current Phase</div>
@@ -939,6 +1084,24 @@ export default function MapView({
         <div className="map-loading-overlay">
           <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }} />
           <p>Loading map…</p>
+        </div>
+      )}
+
+      {/* Live Simulation Sweeper Overlay */}
+      {simRunning && (
+        <div className="radar-overlay-root">
+          <div className="radar-scanner">
+            <div className="radar-sweep" />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', pointerEvents: 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13, color: '#10b981' }}>
+              <span className="live-dot" />
+              SUMO ENGINE SIMULATING
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>
+              Executing TraCI loops & vehicle flow simulations...
+            </div>
+          </div>
         </div>
       )}
     </div>

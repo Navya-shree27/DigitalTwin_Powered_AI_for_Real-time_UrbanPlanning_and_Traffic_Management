@@ -56,6 +56,15 @@ export const scenariosApi = {
 
   testCustomConfig: (id, overrides) =>
     api.post(`/scenarios/${id}/test-custom-config`, { overrides }),
+
+  optimizeSignal: (scenarioId, nodeId) =>
+    api.get(`/scenarios/${scenarioId}/nodes/${nodeId}/optimize`),
+
+  aiRedesign: (scenarioId, nodeId) =>
+    api.post(`/scenarios/${scenarioId}/nodes/${nodeId}/ai-redesign`),
+
+  getProgress: (scenarioId) =>
+    api.get(`/scenarios/${scenarioId}/progress`),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -63,11 +72,11 @@ export const scenariosApi = {
 export const dashboardApi = {
   get: (scenarioId) => api.get(`/dashboard/${scenarioId}`),
   getNetworkGeoJson: (scenarioId) =>
-    api.get(`/dashboard/${scenarioId}/geojson/network`),
+    api.get(`/dashboard/${scenarioId}/geojson/network?t=${Date.now()}`),
   getNodesGeoJson: (scenarioId) =>
-    api.get(`/dashboard/${scenarioId}/geojson/nodes`),
+    api.get(`/dashboard/${scenarioId}/geojson/nodes?t=${Date.now()}`),
   getTelemetry: (scenarioId) =>
-    api.get(`/dashboard/${scenarioId}/telemetry`),
+    api.get(`/dashboard/${scenarioId}/telemetry?t=${Date.now()}`),
 }
 
 // ── Proposals ─────────────────────────────────────────────────────────────────

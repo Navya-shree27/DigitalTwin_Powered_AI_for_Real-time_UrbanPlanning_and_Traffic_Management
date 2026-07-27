@@ -49,10 +49,11 @@ class SUMOTraCIInterface:
     will drive a real SUMO process and return actual telemetry.
     """
 
-    def __init__(self, G, duration_s: int = 3600, seed: int = 42):
+    def __init__(self, G, duration_s: int = 3600, seed: int = 42, scenario_id: int | None = None):
         self.G = G
         self.duration_s = duration_s
         self.seed = seed
+        self.scenario_id = scenario_id
         self._is_running = False
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -240,21 +241,57 @@ class SUMOTraCIInterface:
 
         steps = int(self.duration_s / step_length_s)
         snapshots = []
+        import numpy as np
 
         for step in range(steps):
             traci.simulationStep()
             if step % sample_interval == 0 or step == steps - 1:
-                edge_ids = traci.edge.getIDList()
+                # Write progress file for frontend polling
+                if self.scenario_id is not None:
+                    import json
+                    progress_pct = int(step / max(steps - 1, 1) * 100)
+                    progress_file = ROOT / "data" / f"progress_{self.scenario_id}.json"
+                    try:
+                        with open(progress_file, "w") as pf:
+                            json.dump({
+                                "progress": progress_pct,
+                                "step": step,
+                                "total_steps": steps,
+                                "status": "running"
+                            }, pf)
+                    except Exception:
+                        pass
+
                 snap = {}
-                for eid in edge_ids:
-                    if eid.startswith(":"):
-                        continue
-                    snap[eid] = {
-                        "mean_speed":    traci.edge.getLastStepMeanSpeed(eid),
-                        "occupancy":     traci.edge.getLastStepOccupancy(eid),
-                        "vehicle_count": traci.edge.getLastStepVehicleNumber(eid),
-                        "waiting_time":  traci.edge.getWaitingTime(eid),
-                    }
+                try:
+                    # Get list of all active vehicles (usually <500) instead of all edges (~45,000)
+                    veh_ids = traci.vehicle.getIDList()
+                    edge_vehs = {}
+                    for vid in veh_ids:
+                        try:
+                            eid = traci.vehicle.getRoadID(vid)
+                            if eid.startswith(":"):
+                                continue
+                            speed = traci.vehicle.getSpeed(vid)
+                            wait = traci.vehicle.getWaitingTime(vid)
+                            if eid not in edge_vehs:
+                                edge_vehs[eid] = []
+                            edge_vehs[eid].append({"speed": speed, "wait": wait})
+                        except Exception:
+                            continue
+                    
+                    # Compute aggregated edge stats from the vehicles actually present on them
+                    for eid, vehs in edge_vehs.items():
+                        speeds = [v["speed"] for v in vehs]
+                        waits = [v["wait"] for v in vehs]
+                        snap[eid] = {
+                            "mean_speed":    float(np.mean(speeds)) if speeds else 0.0,
+                            "occupancy":     float(len(vehs) * 0.1),
+                            "vehicle_count": int(len(vehs)),
+                            "waiting_time":  float(np.sum(waits)) if waits else 0.0,
+                        }
+                except Exception as e:
+                    log.error(f"Error in step sampling: {e}")
                 snapshots.append(snap)
 
         return snapshots
@@ -299,6 +336,13 @@ class SUMOTraCIInterface:
             result = self._aggregate(snapshots)
         finally:
             self.stop()
+            if self.scenario_id is not None:
+                progress_file = ROOT / "data" / f"progress_{self.scenario_id}.json"
+                if progress_file.exists():
+                    try:
+                        progress_file.unlink()
+                    except Exception:
+                        pass
 
         result["engine"] = "sumo"
         return result
@@ -375,6 +419,13 @@ class SUMOTraCIInterface:
             node_incoming_waits = [e["wait_time"] for e in edges_out if e["v"] == node_id]
             avg_wait = np.mean(node_incoming_waits) if node_incoming_waits else 0.0
             
+            has_sidewalk = False
+            for u_e, v_e, k_e, edata in self.G.edges(data=True, keys=True):
+                if u_e == node_id or v_e == node_id:
+                    if edata.get("sidewalk_width", 0.0) > 0.0:
+                        has_sidewalk = True
+                        break
+
             nodes_out.append({
                 "node_id": node_id,
                 "lat": float(data.get("y", 14.4644)),
@@ -382,6 +433,10 @@ class SUMOTraCIInterface:
                 "street_count": int(data.get("street_count", 3)),
                 "conflict_rate": round(avg_wait * 0.12, 2) if is_signal else round(avg_wait * 0.02, 2),
                 "avg_wait_time": round(avg_wait, 1),
+                "highway": data.get("highway"),
+                "designation": data.get("designation"),
+                "has_sidewalk": has_sidewalk,
+                "has_dustbin": data.get("has_dustbin", False),
             })
 
         tts = [e["travel_time"] for e in edges_out]

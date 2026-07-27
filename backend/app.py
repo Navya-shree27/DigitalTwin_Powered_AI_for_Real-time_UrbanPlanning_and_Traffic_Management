@@ -31,8 +31,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.database.db_connector import init_db
-from backend.api.routes_simulation import router as simulation_router
-from backend.api.routes_agents import router as agents_router
+from backend.api.routes_simulation import router as simulation_router, scenario_router
+from backend.api.routes_ai import router as ai_router
 from backend.api.routes_dashboard import router as dashboard_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -68,7 +68,8 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(simulation_router)
-app.include_router(agents_router)
+app.include_router(scenario_router)
+app.include_router(ai_router)
 app.include_router(dashboard_router)
 
 

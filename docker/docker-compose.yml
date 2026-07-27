@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5173
+      - DB_ENGINE=sqlite  # Can swap to postgres in production
+    volumes:
+      - ../data:/app/data
+      - ../scenarios:/app/scenarios
+      - ../reports:/app/reports
+    restart: always
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+  postgres:
+    image: kartoza/postgis:15
+    environment:
+      - POSTGRES_DB=digital_twin
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASS=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: always
+
+volumes:
+  postgres_data:

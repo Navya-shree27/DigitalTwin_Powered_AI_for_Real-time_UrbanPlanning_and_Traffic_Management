@@ -35,6 +35,30 @@
         "congestion_ratio": 0.1937,
         "severe_issues": 3697
       }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 4,
+      "timestamp": "2026-07-10T09:15:47.441195+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
+      "key_metrics": {
+        "avg_speed_kph": 29.2,
+        "avg_travel_time_s": 25.66,
+        "congestion_ratio": 0.0,
+        "severe_issues": 0
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 5,
+      "timestamp": "2026-07-17T16:45:23.834715+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
+      "key_metrics": {
+        "avg_speed_kph": 29.2,
+        "avg_travel_time_s": 25.66,
+        "congestion_ratio": 0.0,
+        "severe_issues": 0
+      }
     }
   ],
   "2": [
@@ -48,6 +72,20 @@
         "avg_travel_time_s": 25.66,
         "congestion_ratio": 0.0,
         "severe_issues": 0
+      }
+    }
+  ],
+  "3": [
+    {
+      "scenario_id": 3,
+      "cycle": 1,
+      "timestamp": "2026-07-17T18:20:10.492218+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (5 congested edges)\n\u2022 Severe issues detected: 5\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1465271782_1465266070_0 (unclassified). Simulated\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 29.2,
+        "avg_travel_time_s": 25.66,
+        "congestion_ratio": 0.0001,
+        "severe_issues": 5
       }
     }
   ]

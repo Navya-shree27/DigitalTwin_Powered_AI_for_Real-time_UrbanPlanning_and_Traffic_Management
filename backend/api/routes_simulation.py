@@ -81,9 +81,9 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         metrics = compute_metrics(telemetry)
 
         # ── Issue detection ───────────────────────────────────────────────────
-        from agents.issue_detection.congestion_detector import detect_congestion
-        from agents.issue_detection.intersection_safety_analyzer import detect_unsafe_intersections
-        from agents.issue_detection.lane_utilization_analyzer import detect_lane_issues
+        from ai.issue_detection.congestion_detector import detect_congestion
+        from ai.issue_detection.intersection_safety_analyzer import detect_unsafe_intersections
+        from ai.issue_detection.lane_utilization_analyzer import detect_lane_issues
 
         all_issues = (
             detect_congestion(telemetry) +
@@ -92,9 +92,9 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         )
 
         # ── Proposal generation ────────────────────────────────────────────────
-        from agents.proposal_generator.signal_timing_optimizer import generate_signal_proposals
-        from agents.proposal_generator.lane_change_recommender import generate_lane_proposals
-        from agents.proposal_generator.route_diversion_planner import generate_diversion_proposals
+        from ai.proposal_generator.signal_timing_optimizer import generate_signal_proposals
+        from ai.proposal_generator.lane_change_recommender import generate_lane_proposals
+        from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
 
         all_proposals = (
             generate_signal_proposals(all_issues, telemetry) +
@@ -104,7 +104,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
 
         # ── LLM agent analysis ────────────────────────────────────────────────
         try:
-            from agents.city_inspector_agent.llm_agent import CityInspectorAgent
+            from ai.city_inspector_agent.llm_agent import CityInspectorAgent
             scenario = db.query(Scenario).get(scenario_id)
             agent = CityInspectorAgent()
             agent_result = agent.analyze(
@@ -262,9 +262,13 @@ def list_runs(scenario_id: int, db: Session = Depends(get_db)) -> dict:
 
 class SignalOverride(BaseModel):
     node_id: int
-    green_s: int = Field(..., ge=10, le=120)
+    green_s: int = Field(default=30, ge=10, le=120)
     amber_s: int = Field(default=3, ge=2, le=5)
-    red_s: int = Field(..., ge=10, le=120)
+    red_s: int = Field(default=30, ge=10, le=120)
+    is_signal: bool = Field(default=True, description="Whether this node should be a traffic signal")
+    lanes: int | None = Field(default=None, ge=1, le=4, description="Lanes count for streets connected to this node")
+    has_sidewalk: bool | None = Field(default=None, description="Whether connected streets should have a sidewalk")
+    has_dustbin: bool | None = Field(default=None, description="Whether this node has dustbins")
 
 
 class CustomConfigValidationRequest(BaseModel):
@@ -294,6 +298,8 @@ def test_custom_config(
     # Translate overrides to applied proposals format
     apply_proposals = []
     for override in body.overrides:
+        if not override.is_signal:
+            continue
         # Webster split comparison simulation
         import math
         opt_green = 35.0  # reference green split
@@ -312,14 +318,51 @@ def test_custom_config(
             }
         })
 
+    # Load graph and apply junction type changes (install/remove signals, lanes, footpaths, dustbins)
+    from simulation.simulation_runner import load_graph, run_simulation
+    G = load_graph()
+    G_modified = G.copy()
+    for override in body.overrides:
+        nid = override.node_id
+        found_key = None
+        if str(nid) in G_modified.nodes:
+            found_key = str(nid)
+        elif int(nid) in G_modified.nodes:
+            found_key = int(nid)
+            
+        if found_key is not None:
+            # 1. Traffic signal toggle
+            if override.is_signal:
+                G_modified.nodes[found_key]["highway"] = "traffic_signals"
+            else:
+                G_modified.nodes[found_key]["highway"] = "priority"
+                
+            # 2. Lanes (road width)
+            if override.lanes is not None:
+                for u, v, k, data in list(G_modified.edges(data=True, keys=True)):
+                    if u == found_key or v == found_key:
+                        G_modified[u][v][k]["lanes"] = override.lanes
+                        G_modified[u][v][k]["capacity"] = override.lanes * 900
+                        
+            # 3. Footpaths (sidewalks)
+            if override.has_sidewalk is not None:
+                width = 2.0 if override.has_sidewalk else 0.0
+                for u, v, k, data in list(G_modified.edges(data=True, keys=True)):
+                    if u == found_key or v == found_key:
+                        G_modified[u][v][k]["sidewalk_width"] = width
+                        
+            # 4. Dustbins (POI overlay annotation layer)
+            if override.has_dustbin is not None:
+                G_modified.nodes[found_key]["has_dustbin"] = override.has_dustbin
+
     # Run the custom simulation
-    from simulation.simulation_runner import run_simulation
     custom_telemetry = run_simulation(
         scenario_id=scenario_id,
         engine=baseline_run.engine,
         duration_s=baseline_run.duration_s,
         seed=baseline_run.seed,
-        apply_proposals=apply_proposals
+        apply_proposals=apply_proposals,
+        G=G_modified
     )
 
     # Compute custom metrics
@@ -357,3 +400,275 @@ def test_custom_config(
         "deltas":      deltas,
         "telemetry":   custom_telemetry
     }
+
+
+@router.get("/{scenario_id}/nodes/{node_id}/optimize")
+def optimize_node_signal(
+    scenario_id: int,
+    node_id: int,
+    db: Session = Depends(get_db)
+) -> dict:
+    """
+    AI-powered Webster's Equation signal optimization for a given junction.
+
+    Returns optimally computed green_s, amber_s, red_s splits based on
+    approach lane capacities and simulated flow from the last baseline run.
+
+    Webster's Method:
+      Y = sum(flow_i / capacity_i)  for each critical lane i
+      C0 = (1.5 * L + 5) / (1 - Y)  optimal cycle length
+      Green_i = (C0 - L) * (y_i / Y)  per-approach green split
+    """
+    import math
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from backend.api.routes_dashboard import _latest_done_run
+    baseline_run = _latest_done_run(scenario_id, db)
+    if not baseline_run:
+        raise HTTPException(400, "No baseline simulation found. Run a simulation first.")
+
+    from simulation.simulation_runner import load_graph
+    G = load_graph()
+
+    if node_id not in G.nodes:
+        raise HTTPException(404, f"Node {node_id} not found in network graph.")
+
+    # Collect incoming edge approaches
+    incoming_edges = []
+    for u, v, k, data in G.edges(data=True, keys=True):
+        if v == node_id:
+            lanes = data.get("lanes", 1)
+            if isinstance(lanes, list):
+                lanes = int(lanes[0])
+            else:
+                lanes = int(lanes) if lanes else 1
+            speed_kph = float(data.get("speed_kph", 40))
+            capacity = lanes * 900  # veh/hr per standard lane
+            # Estimate flow from baseline telemetry
+            telemetry = baseline_run.get_telemetry()
+            edge_id = f"{u}_{v}_{k}"
+            edge_data = next((e for e in telemetry.get("edges", []) if e.get("edge_id") == edge_id), None)
+            flow = edge_data["flow"] if edge_data else (capacity * 0.4)
+            incoming_edges.append({
+                "edge_id": edge_id,
+                "lanes": lanes,
+                "capacity": capacity,
+                "flow": flow,
+                "y": flow / max(capacity, 1)
+            })
+
+    if not incoming_edges:
+        # Node exists but has no incoming edges (source node) — return defaults
+        return {"green_s": 30, "amber_s": 3, "red_s": 30, "cycle_s": 63, "method": "default"}
+
+    # Webster's Equation
+    n_approaches = len(incoming_edges)
+    L = max(2, n_approaches)  # total lost time per cycle (sec)
+    Y = sum(e["y"] for e in incoming_edges)
+    Y = min(Y, 0.85)  # cap Y to avoid division explosion
+
+    C0 = (1.5 * L + 5) / max(1 - Y, 0.01)
+    C0 = max(30, min(int(round(C0)), 180))  # clamp 30–180s
+
+    effective_green = C0 - L
+
+    # Allocate green proportionally among approaches
+    # Critical approach = highest y_i
+    dominant_y = max(e["y"] for e in incoming_edges)
+    dominant_y = max(dominant_y, 0.01)
+
+    # For a simple 2-phase controller (most Davanagere intersections)
+    # Allocate main approach green = effective_green * dominant_y / Y
+    main_green = int(round(effective_green * dominant_y / max(Y, 0.01)))
+    main_green = max(10, min(main_green, 120))
+    amber = 3
+    red = max(10, C0 - main_green - amber)
+    red = min(red, 120)
+
+    return {
+        "green_s": main_green,
+        "amber_s": amber,
+        "red_s":   red,
+        "cycle_s": C0,
+        "Y":       round(Y, 4),
+        "approaches": len(incoming_edges),
+        "method": "webster"
+    }
+
+
+@router.post("/{scenario_id}/nodes/{node_id}/ai-redesign")
+def ai_redesign(scenario_id: int, node_id: int, db: Session = Depends(get_db)) -> dict:
+    """
+    AI Agent redesigns the intersection (signals, road width, footpaths, dustbins)
+    applying optimal rules and Webster calculations.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from backend.api.routes_dashboard import _latest_done_run
+    baseline_run = _latest_done_run(scenario_id, db)
+    if not baseline_run:
+        raise HTTPException(400, "No baseline simulation found. Run a simulation first.")
+
+    from simulation.simulation_runner import load_graph
+    G = load_graph()
+
+    found_key = None
+    if str(node_id) in G.nodes:
+        found_key = str(node_id)
+    elif int(node_id) in G.nodes:
+        found_key = int(node_id)
+
+    if found_key is None:
+        raise HTTPException(404, f"Node {node_id} not found in network graph.")
+
+    # 1. Analyze approaches
+    incoming_edges = []
+    total_flow = 0.0
+    for u, v, k, data in G.edges(data=True, keys=True):
+        if v == found_key:
+            lanes = data.get("lanes", 1)
+            if isinstance(lanes, list):
+                lanes = int(lanes[0])
+            else:
+                lanes = int(lanes) if lanes else 1
+            capacity = lanes * 900
+            
+            telemetry = baseline_run.get_telemetry()
+            edge_id = f"{u}_{v}_{k}"
+            edge_data = next((e for e in telemetry.get("edges", []) if e.get("edge_id") == edge_id), None)
+            flow = edge_data["flow"] if edge_data else (capacity * 0.4)
+            total_flow += flow
+            incoming_edges.append({
+                "flow": flow,
+                "capacity": capacity,
+                "y": flow / max(capacity, 1)
+            })
+
+    # 2. Decision making rules
+    street_count = len(incoming_edges)
+    is_signal = street_count >= 4 or total_flow > 1200
+    
+    # Lanes redesign (Road width)
+    if total_flow > 1500 or any(e["y"] > 0.75 for e in incoming_edges):
+        lanes_recommend = 3
+        lanes_reason = "Widened approaches to 3 lanes to handle severe congestion and bottleneck queues"
+    elif total_flow > 800:
+        lanes_recommend = 2
+        lanes_reason = "Optimized to 2 lanes to accommodate moderate vehicle traffic flow"
+    else:
+        lanes_recommend = 1
+        lanes_reason = "Maintained single-lane configuration appropriate for lower traffic density"
+
+    # Footpath (Sidewalk) redesign
+    has_sidewalk = street_count >= 3
+    sidewalk_reason = "Added 2m pedestrian footpaths to ensure safety at this multi-way junction" if has_sidewalk else "Sidewalks not required for low-conflict two-way link"
+
+    # Dustbin redesign
+    has_dustbin = has_sidewalk and street_count >= 4
+    dustbin_reason = "Placed waste disposal bins at high-occupancy crossing zones" if has_dustbin else "Litter density does not warrant dedicated waste bins here"
+
+    # Signals timing redesign via Webster
+    green_s = 30
+    amber_s = 3
+    red_s = 30
+    cycle_s = 60
+    signal_reason = "Installed active signal control to regulate high-conflict vehicle paths"
+    
+    if is_signal and incoming_edges:
+        L = max(2, street_count)
+        Y = sum(e["y"] for e in incoming_edges)
+        Y = min(Y, 0.85)
+        C0 = (1.5 * L + 5) / max(1 - Y, 0.01)
+        C0 = max(30, min(int(round(C0)), 120))
+        effective_green = C0 - L
+        dominant_y = max(e["y"] for e in incoming_edges)
+        dominant_y = max(dominant_y, 0.01)
+        
+        green_s = int(round(effective_green * dominant_y / max(Y, 0.01)))
+        green_s = max(10, min(green_s, 90))
+        red_s = max(10, C0 - green_s - amber_s)
+        cycle_s = C0
+        signal_reason = f"Optimized green phase to {green_s}s (Cycle: {C0}s) using Webster's flow equation"
+    elif not is_signal:
+        signal_reason = "Reverted to priority rules (unsignalized) to eliminate unnecessary idling delay"
+
+    reasoning_list = [lanes_reason, sidewalk_reason, dustbin_reason, signal_reason]
+    full_reasoning = " · ".join(reasoning_list)
+
+    return {
+        "node_id": node_id,
+        "is_signal": is_signal,
+        "green_s": green_s,
+        "amber_s": amber_s,
+        "red_s": red_s,
+        "lanes": lanes_recommend,
+        "has_sidewalk": has_sidewalk,
+        "has_dustbin": has_dustbin,
+        "reasoning": full_reasoning
+    }
+
+
+@router.get("/{scenario_id}/progress")
+def get_scenario_progress(scenario_id: int) -> dict:
+    """Check live simulation run progress for this scenario."""
+    from pathlib import Path
+    import json
+    ROOT = Path(__file__).resolve().parent.parent.parent
+    progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
+    
+    if progress_file.exists():
+        try:
+            with open(progress_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"progress": 0, "status": "idle"}
+
+
+# ── Phase 15 APIs ─────────────────────────────────────────────────────────────
+
+scenario_router = APIRouter(prefix="/scenario", tags=["Scenario (Phase 15)"])
+
+
+@scenario_router.post("")
+def create_scenario_alt(body: ScenarioCreate, db: Session = Depends(get_db)) -> dict:
+    """Create a new simulation scenario from a map area (Phase 15)."""
+    return create_scenario(body=body, db=db)
+
+
+@scenario_router.post("/{scenario_id}/run")
+def run_simulation_alt(
+    scenario_id: int,
+    body: SimulateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Run baseline simulation for a scenario (Phase 15)."""
+    return simulate(scenario_id=scenario_id, body=body, background_tasks=background_tasks, db=db)
+
+
+@scenario_router.post("/{scenario_id}/modify")
+def modify_scenario_alt(
+    scenario_id: int,
+    body: CustomConfigValidationRequest,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Apply signal/lane custom modifications to a scenario (Phase 15)."""
+    return test_custom_config(scenario_id=scenario_id, body=body, db=db)
+
+
+@scenario_router.get("/{scenario_id}/recommendations")
+def get_recommendations_alt(
+    scenario_id: int,
+    proposal_type: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Retrieve AI-generated optimization recommendations/proposals (Phase 15)."""
+    from backend.api.routes_ai import get_proposals
+    return get_proposals(scenario_id=scenario_id, proposal_type=proposal_type, limit=limit, db=db)
+

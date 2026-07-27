@@ -94,7 +94,22 @@ def load_graph() -> nx.MultiDiGraph:
         from simulation.osm_to_network import build_network
         build_network()
     log.info(f"Loading graph from {graphml_path}")
-    return ox.load_graphml(str(graphml_path))
+    G = ox.load_graphml(str(graphml_path))
+    
+    # Synchronize graph G nodes with the 10 real-world target signals
+    target_ids = [571395243, 571407773, 1470841066, 1465243476, 1822610272, 1782305061, 2702258541, 1782236061, 1464736528, 1782269831]
+    for tid in target_ids:
+        tid_str = str(tid)
+        found_key = None
+        if tid_str in G.nodes:
+            found_key = tid_str
+        elif tid in G.nodes:
+            found_key = tid
+            
+        if found_key is not None:
+            G.nodes[found_key]["highway"] = "traffic_signals"
+            
+    return G
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +243,13 @@ class SyntheticSimulator:
                 (np.random.gamma(2, scale=5) + (avg_flow / 1000 * 8)) * wait_modifier, 0, 120
             ))
 
+            has_sidewalk = False
+            for u_e, v_e, k_e, edata in self.G.edges(data=True, keys=True):
+                if u_e == node_id or v_e == node_id:
+                    if edata.get("sidewalk_width", 0.0) > 0.0:
+                        has_sidewalk = True
+                        break
+
             records.append({
                 "node_id":      int(node_id),
                 "lat":          round(lat, 6),
@@ -235,6 +257,10 @@ class SyntheticSimulator:
                 "street_count": sc,
                 "conflict_rate": round(conflict_rate, 3),
                 "avg_wait_time": round(avg_wait, 2),
+                "highway":       data.get("highway"),
+                "designation":   data.get("designation"),
+                "has_sidewalk":  has_sidewalk,
+                "has_dustbin":   data.get("has_dustbin", False),
             })
         return records
 
@@ -283,10 +309,10 @@ class SyntheticSimulator:
 # SUMO / CityFlow stubs
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_sumo(G: nx.MultiDiGraph, duration_s: int, seed: int) -> dict:
+def _run_sumo(G: nx.MultiDiGraph, duration_s: int, seed: int, scenario_id: int | None = None) -> dict:
     """Delegate to traci_interface once SUMO is installed."""
     from simulation.traci_interface import SUMOTraCIInterface
-    iface = SUMOTraCIInterface(G, duration_s, seed)
+    iface = SUMOTraCIInterface(G, duration_s, seed, scenario_id)
     return iface.run()
 
 
@@ -304,6 +330,7 @@ def run_simulation(
     duration_s: int | None = None,
     seed: int | None = None,
     apply_proposals: list[dict] | None = None,
+    G: nx.MultiDiGraph | None = None,
 ) -> dict:
     """
     Run a traffic simulation for *scenario_id* and return the full telemetry
@@ -317,6 +344,7 @@ def run_simulation(
     seed            : Random seed for reproducibility.
     apply_proposals : Optional list of proposal dicts to apply before
                       running (for validation/re-simulation).
+    G               : Optional pre-loaded or modified NetworkX road network graph.
     """
     engine     = engine     or os.getenv("SIMULATION_ENGINE", "synthetic")
     duration_s = duration_s or int(os.getenv("SIMULATION_DURATION", "3600"))
@@ -324,7 +352,8 @@ def run_simulation(
 
     log.info(f"Starting simulation — scenario={scenario_id}, engine={engine}, duration={duration_s}s, seed={seed}")
 
-    G = load_graph()
+    if G is None:
+        G = load_graph()
 
     # Apply any proposals to the graph (e.g. speed/lane changes)
     if apply_proposals:
@@ -333,7 +362,7 @@ def run_simulation(
     if engine == "synthetic":
         result = SyntheticSimulator(G, duration_s, seed, apply_proposals).run()
     elif engine == "sumo":
-        result = _run_sumo(G, duration_s, seed)
+        result = _run_sumo(G, duration_s, seed, scenario_id)
     elif engine == "cityflow":
         result = _run_cityflow(G, duration_s, seed)
     else:

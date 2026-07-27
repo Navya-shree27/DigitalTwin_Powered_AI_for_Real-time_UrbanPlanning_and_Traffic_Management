@@ -226,117 +226,36 @@ def get_network_geojson(scenario_id: int) -> FileResponse:
 @router.get("/api/dashboard/{scenario_id}/geojson/nodes")
 def get_nodes_geojson(scenario_id: int) -> FileResponse:
     """Serve node (intersection) GeoJSON for marker rendering.
-    Dynamically rebuilds nodes.geojson with OSM tags if stale/lacking attributes.
+    Forces synchronization of nodes.geojson with target real-world signals in node_mapping.json.
     """
-    needs_regen = True
-    if NODES_GEOJSON.exists():
-        try:
-            with open(NODES_GEOJSON, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                features = data.get("features", [])
-                for feat in features[:150]:  # check first 150 features
-                    if feat.get("properties", {}).get("highway") == "traffic_signals":
-                        needs_regen = False
-                        break
-        except Exception as e:
-            log.warning(f"Error checking nodes.geojson: {e}")
-            needs_regen = True
-
-    # Always do the nearest-node mapping mapping for the 10 real-world junctions on load if regen is needed
-    graphml_path = ROOT / "data" / "processed" / "network" / "network.graphml"
-    if graphml_path.exists() and needs_regen:
-        try:
-            import osmnx as ox
-            import pandas as pd
+    try:
+        mapping_path = ROOT / "data" / "node_mapping.json"
+        if mapping_path.exists() and NODES_GEOJSON.exists():
+            with open(mapping_path, "r", encoding="utf-8") as f_map:
+                mapped_junctions = json.load(f_map)
             
-            log.info("Loading network graphml to resolve real-world signal coordinates...")
-            G = ox.load_graphml(str(graphml_path))
-            gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False).reset_index()
+            mapped_signals = {str(item["osmid"]): item["name"] for item in mapped_junctions}
             
-            # Debug: Check which of our target junctions are actually in the graphml
-            target_ids = [571395243, 571407773, 1470841066, 1465243476, 1822610272, 1782305061, 2702258541, 1782236061, 1464736528, 1782269831]
-            graphml_ids = gdf_nodes["osmid"].astype(str).tolist()
-            present_in_graph = [tid for tid in target_ids if str(tid) in graphml_ids]
-            
-            # Also find all OSM IDs in the first 20 nodes of nodes.geojson that are close to lat 14.46
-            close_nodes = gdf_nodes[gdf_nodes["y"].between(14.45, 14.48)]
-            
-            raise HTTPException(400, {
-                "total_nodes_in_graph": len(gdf_nodes),
-                "target_ids_sought": target_ids,
-                "present_in_graph": present_in_graph,
-                "nodes_near_davangere_center_count": len(close_nodes),
-                "sample_near_nodes": close_nodes[["osmid", "y", "x"]].head(10).to_dict(orient="records")
-            })
-            
-            target_junctions = [
-                {"name": "Aruna Theatre Junction", "lat": 14.4678344, "lon": 75.9145766},
-                {"name": "Vidyarthi Bhavan Junction", "lat": 14.4592308, "lon": 75.9198481},
-                {"name": "Mothi Circle (PB Road)", "lat": 14.4644, "lon": 75.9175},
-                {"name": "Gandhi Circle", "lat": 14.4657, "lon": 75.9227},
-                {"name": "District Court Junction", "lat": 14.4618, "lon": 75.9196},
-                {"name": "8th Main / PB Road Signal", "lat": 14.4634, "lon": 75.9157},
-                {"name": "KSRTC Bus Stand Junction", "lat": 14.4668, "lon": 75.9157},
-                {"name": "Vinobanagar Circle", "lat": 14.4560, "lon": 75.9155},
-                {"name": "SBI / Collector Office", "lat": 14.4640, "lon": 75.9195},
-                {"name": "Anjaneya Temple Road", "lat": 14.4605, "lon": 75.9220},
-            ]
-            
-            matched_nodes = []
-            for j in target_junctions:
-                node_id = ox.nearest_nodes(G, X=j["lon"], Y=j["lat"])
-                node_data = G.nodes[node_id]
-                matched_nodes.append({
-                    "name": j["name"],
-                    "osmid": int(node_id),
-                    "lat": float(node_data["y"]),
-                    "lon": float(node_data["x"]),
-                    "street_count": int(node_data.get("street_count", 3))
-                })
+            with open(NODES_GEOJSON, "r", encoding="utf-8") as f_nodes:
+                nodes_data = json.load(f_nodes)
                 
-            mapping_path = ROOT / "data" / "node_mapping.json"
-            with open(mapping_path, "w", encoding="utf-8") as f_map:
-                json.dump(matched_nodes, f_map, indent=2)
-            log.info(f"Successfully wrote exact node coordinates to {mapping_path}")
+            features = nodes_data.get("features", [])
+            modified = False
+            for feat in features:
+                props = feat.get("properties", {})
+                osmid_str = str(props.get("osmid", ""))
+                if osmid_str in mapped_signals:
+                    if props.get("highway") != "traffic_signals" or props.get("designation") != mapped_signals[osmid_str]:
+                        props["highway"] = "traffic_signals"
+                        props["designation"] = mapped_signals[osmid_str]
+                        modified = True
             
-            # Now update the nodes.geojson with these traffic signals!
-            gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False).reset_index()
-            
-            # Add highway column if missing
-            if "highway" not in gdf_nodes.columns:
-                gdf_nodes["highway"] = None
-                
-            # Set target nodes as traffic_signals (using string comparison because graphml IDs are loaded as strings/objects)
-            matched_ids_str = [str(m["osmid"]) for m in matched_nodes]
-            gdf_nodes["osmid_str"] = gdf_nodes["osmid"].astype(str)
-            gdf_nodes.loc[gdf_nodes["osmid_str"].isin(matched_ids_str), "highway"] = "traffic_signals"
-            
-            # Map designation names for UI display
-            gdf_nodes["designation"] = None
-            for m in matched_nodes:
-                gdf_nodes.loc[gdf_nodes["osmid_str"] == str(m["osmid"]), "designation"] = m["name"]
-            
-            cols = ["osmid", "geometry", "street_count"]
-            for col_name in ("highway", "designation", "name", "ref"):
-                if col_name in gdf_nodes.columns:
-                    cols.append(col_name)
-                    
-            gdf_nodes = gdf_nodes[cols]
-            
-            # Stringify list-valued columns
-            for col in gdf_nodes.columns:
-                if col == "geometry":
-                    continue
-                gdf_nodes[col] = gdf_nodes[col].apply(
-                    lambda x: x[0] if isinstance(x, list) else x
-                )
-                
-            gdf_nodes.to_file(str(NODES_GEOJSON), driver="GeoJSON")
-            log.info("Regenerated nodes.geojson with resolved traffic signal tags.")
-        except Exception as e:
-            log.error(f"Failed during dynamic node processing: {e}")
-            if not NODES_GEOJSON.exists():
-                raise HTTPException(500, f"Failed to generate nodes GeoJSON: {e}")
+            if modified:
+                with open(NODES_GEOJSON, "w", encoding="utf-8") as f_write:
+                    json.dump(nodes_data, f_write, indent=2)
+                log.info("Successfully synchronized nodes.geojson with real-world traffic signals.")
+    except Exception as e:
+        log.error(f"Failed to synchronize traffic signals in nodes.geojson: {e}")
 
     return FileResponse(
         str(NODES_GEOJSON),

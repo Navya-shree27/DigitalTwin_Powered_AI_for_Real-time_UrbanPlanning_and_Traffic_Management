@@ -99,35 +99,58 @@ def compute_metrics(telemetry: dict) -> dict:
     total_cap    = float(capacities.sum())
     throughput_i = total_flow / max(total_cap, 1)
 
-    # Efficiency score (0–100): weights speed, congestion, wait time
-    speed_score      = float(np.mean(speeds / np.maximum(ff_speeds, 1))) * 100
-    congestion_score = (1 - congestion_ratio) * 100
-    wait_score       = max(0, 100 - float(np.mean(wait_times)) / 60 * 100)
-    efficiency_score = round(0.4 * speed_score + 0.4 * congestion_score + 0.2 * wait_score, 1)
+    # Compute KPIs localized to active flowing edges to prevent skew from empty district roads
+    active_mask = flows > 0.05
+    if not np.any(active_mask):
+        active_mask = np.ones_like(flows, dtype=bool)
+
+    active_speeds = speeds[active_mask]
+    active_ff_speeds = ff_speeds[active_mask]
+    active_waits = wait_times[active_mask]
+    active_travel_times = travel_times[active_mask]
+
+    active_congested = congested_mask[active_mask].sum()
+    active_congestion_ratio = active_congested / max(len(active_speeds), 1)
+
+    avg_wait = round(float(np.mean(active_waits)), 2)
+    if avg_wait <= 10.0:
+        los = "A"
+    elif avg_wait <= 20.0:
+        los = "B"
+    elif avg_wait <= 35.0:
+        los = "C"
+    elif avg_wait <= 55.0:
+        los = "D"
+    elif avg_wait <= 80.0:
+        los = "E"
+    else:
+        los = "F"
 
     metrics = {
-        "avg_travel_time_s":   round(float(np.mean(travel_times)), 2),
-        "p85_travel_time_s":   round(float(np.percentile(travel_times, 85)), 2),
-        "avg_wait_time_s":     round(float(np.mean(wait_times)), 2),
+        "avg_travel_time_s":   round(float(np.mean(active_travel_times)), 2),
+        "p85_travel_time_s":   round(float(np.percentile(active_travel_times, 85)), 2),
+        "avg_wait_time_s":     avg_wait,
         "p85_wait_time_s":     round(float(np.percentile(wait_times, 85)), 2),
-        "avg_speed_kph":       round(float(np.mean(speeds)), 2),
+        "avg_speed_kph":       round(float(np.mean(active_speeds)), 2),
         "total_flow_veh_h":    round(total_flow, 0),
         "throughput_index":    round(throughput_i, 4),
-        "congested_edges":     congested_count,
+        "congested_edges":     int(congested_mask.sum()),
         "total_edges":         len(edges),
-        "congestion_ratio":    round(congestion_ratio, 4),
+        "congestion_ratio":    round(active_congestion_ratio, 4),
         "total_delay_s":       round(float(delays.sum()), 2),
         "avg_delay_s":         round(float(delays.mean()), 2),
         "emissions_proxy":     round(emissions_proxy, 4),
-        "noise_pollution_db":  round(noise_pollution_db, 1),
+        "noise_pollution_db":  round(noise_pollution_db, 2),
         "efficiency_score":    min(100.0, max(0.0, efficiency_score)),
+        "level_of_service":    los,
     }
     log.info(
         f"Metrics: speed={metrics['avg_speed_kph']} km/h, "
         f"wait={metrics['avg_wait_time_s']}s, "
         f"congestion={metrics['congestion_ratio']:.1%}, "
         f"noise={metrics['noise_pollution_db']} dBA, "
-        f"efficiency={metrics['efficiency_score']}"
+        f"efficiency={metrics['efficiency_score']}, "
+        f"LOS={metrics['level_of_service']}"
     )
     return metrics
 
@@ -141,4 +164,5 @@ def _zero_metrics() -> dict:
         "total_edges": 0,       "congestion_ratio": 0,
         "total_delay_s": 0,     "avg_delay_s": 0,
         "emissions_proxy": 0,   "noise_pollution_db": 0.0, "efficiency_score": 0,
+        "level_of_service": "A",
     }
