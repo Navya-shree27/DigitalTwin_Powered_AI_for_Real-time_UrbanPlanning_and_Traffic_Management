@@ -41,32 +41,42 @@ def _latest_done_run(scenario_id: int, db: Session) -> SimulationRun | None:
     )
 
 
+# Track in-progress validations so frontend can poll status
+_validation_status: dict[int, str] = {}  # proposal_db_id -> "pending" | "done" | "failed"
+
+
 def _validate_proposal_task(proposal_db_id: int):
     """Background task: re-simulate with proposal applied, compute comparison."""
     from backend.database.db_connector import SessionLocal
+    _validation_status[proposal_db_id] = "pending"
     db = SessionLocal()
     try:
         proposal = db.query(Proposal).get(proposal_db_id)
         if not proposal:
+            _validation_status[proposal_db_id] = "failed"
             return
 
         baseline_run = db.query(SimulationRun).get(proposal.run_id)
         if not baseline_run:
+            _validation_status[proposal_db_id] = "failed"
             return
 
         baseline_telemetry = baseline_run.get_telemetry()
         if not baseline_telemetry:
             log.warning(f"No telemetry for run {baseline_run.id} — cannot validate.")
+            _validation_status[proposal_db_id] = "failed"
             return
 
-        # Re-simulate with proposal applied
+        # Re-simulate with proposal applied.
+        # ALWAYS use synthetic engine for validation — SUMO may not be available
+        # and validation only needs relative delta, not absolute SUMO accuracy.
         from simulation.simulation_runner import run_simulation
         params = proposal.get_parameters()
         proposal_telemetry = run_simulation(
             scenario_id     = baseline_run.scenario_id,
-            engine          = baseline_run.engine,
-            duration_s      = baseline_run.duration_s,
-            seed            = baseline_run.seed,
+            engine          = "synthetic",          # always synthetic for validation
+            duration_s      = baseline_run.duration_s or 3600,
+            seed            = (baseline_run.seed or 42) + 1,  # different seed → distinct sample
             apply_proposals = [params],
         )
 
@@ -84,7 +94,15 @@ def _validate_proposal_task(proposal_db_id: int):
             scenario_id      = baseline_run.scenario_id,
         )
 
-        # Save validation result
+        # Remove stale validation result if it exists (re-validate scenario)
+        existing_vr = db.query(ValidationResult).filter(
+            ValidationResult.proposal_id_fk == proposal_db_id
+        ).first()
+        if existing_vr:
+            db.delete(existing_vr)
+            db.flush()
+
+        # Save new validation result
         vr = ValidationResult(
             proposal_id_fk    = proposal_db_id,
             scenario_id       = baseline_run.scenario_id,
@@ -98,9 +116,10 @@ def _validate_proposal_task(proposal_db_id: int):
         proposal.validated = True
         db.add(proposal)
         db.commit()
+        _validation_status[proposal_db_id] = "done"
         log.info(f"Validation complete for proposal {proposal_db_id}: {comparison['verdict']}")
 
-        # Generate markdown reports as well
+        # Generate markdown reports (non-critical)
         try:
             from validation.report_generator import generate_report
             from backend.models.schema import Scenario
@@ -115,10 +134,11 @@ def _validate_proposal_task(proposal_db_id: int):
                 proposal_telemetry=proposal_telemetry
             )
         except Exception as rep_err:
-            log.error(f"Failed to generate markdown report: {rep_err}", exc_info=True)
+            log.warning(f"Report generation failed (non-critical): {rep_err}")
 
     except Exception as e:
         log.error(f"Validation failed for proposal {proposal_db_id}: {e}", exc_info=True)
+        _validation_status[proposal_db_id] = "failed"
     finally:
         db.close()
 
@@ -193,17 +213,60 @@ def validate_proposal(
     if not proposal:
         raise HTTPException(404, f"Proposal {proposal_db_id} not found.")
 
+    # If already validated, allow re-validation by resetting the flag
+    if proposal.validated:
+        vr = db.query(ValidationResult).filter(
+            ValidationResult.proposal_id_fk == proposal_db_id
+        ).first()
+        if vr:
+            return {
+                "message": "Already validated.",
+                "validation": vr.to_dict(),
+            }
+        # validated flag set but no result — reset and re-run
+        proposal.validated = False
+        db.add(proposal)
+        db.commit()
+
+    # Mark as pending immediately so frontend polling can detect it
+    _validation_status[proposal_db_id] = "pending"
+    background_tasks.add_task(_validate_proposal_task, proposal_db_id=proposal_db_id)
+    return {
+        "message": "Validation started in background.",
+        "proposal_id": proposal_db_id,
+        "status": "pending"
+    }
+
+
+@router.get("/api/proposals/{proposal_db_id}/validate/status")
+def get_validation_status(
+    proposal_db_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Poll endpoint — returns 'pending', 'done', or 'failed'."""
+    # Check in-memory status first (hot path)
+    status = _validation_status.get(proposal_db_id, None)
+
+    # Check DB regardless
+    proposal = db.query(Proposal).get(proposal_db_id)
+    if not proposal:
+        raise HTTPException(404, f"Proposal {proposal_db_id} not found.")
+
     if proposal.validated:
         vr = db.query(ValidationResult).filter(
             ValidationResult.proposal_id_fk == proposal_db_id
         ).first()
         return {
-            "message": "Already validated.",
+            "status": "done",
+            "proposal_id": proposal_db_id,
             "validation": vr.to_dict() if vr else None,
         }
 
-    background_tasks.add_task(_validate_proposal_task, proposal_db_id=proposal_db_id)
-    return {"message": "Validation started in background.", "proposal_id": proposal_db_id}
+    return {
+        "status": status or "pending",
+        "proposal_id": proposal_db_id,
+        "validation": None,
+    }
 
 
 @router.get("/api/proposals/{proposal_db_id}")

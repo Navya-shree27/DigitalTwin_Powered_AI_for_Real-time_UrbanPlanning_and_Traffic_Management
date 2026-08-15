@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,10 @@ log = logging.getLogger("traci_interface")
 
 ROOT = Path(__file__).resolve().parent.parent
 SUMO_CFG = ROOT / "simulation" / "sumo_config" / "simulation.sumocfg"
+
+# Global lock: only one SUMO process at a time (TraCI default label is shared)
+_SUMO_LOCK = threading.Lock()
+
 
 # ── Try importing TraCI ───────────────────────────────────────────────────────
 try:
@@ -55,6 +61,8 @@ class SUMOTraCIInterface:
         self.seed = seed
         self.scenario_id = scenario_id
         self._is_running = False
+        # Unique label per run — prevents KeyError when multiple runs coexist
+        self._label = f"sumo_{uuid.uuid4().hex[:8]}"
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -215,17 +223,24 @@ class SUMOTraCIInterface:
             "--no-warnings", "true",
             "--duration-log.statistics", "true",
         ]
-        traci.start(cmd)
+        traci.start(cmd, label=self._label)
         self._is_running = True
-        log.info(f"SUMO started with config {SUMO_CFG}")
+        log.info(f"SUMO started with config {SUMO_CFG} (label={self._label})")
         return True
 
     def stop(self) -> None:
-        """Close the TraCI connection and SUMO process."""
-        if TRACI_AVAILABLE and self._is_running:
-            traci.close()
+        """Close the TraCI connection and SUMO process (safe even if already closed)."""
+        if not TRACI_AVAILABLE or not self._is_running:
+            return
+        try:
+            conn = traci.getConnection(self._label)
+            conn.close()
+        except Exception:
+            # Connection already gone — fine
+            pass
+        finally:
             self._is_running = False
-            log.info("SUMO stopped.")
+            log.info(f"SUMO stopped (label={self._label}).")
 
     # ── Step loop ─────────────────────────────────────────────────────────────
 
@@ -243,8 +258,9 @@ class SUMOTraCIInterface:
         snapshots = []
         import numpy as np
 
+        conn = traci.getConnection(self._label)
         for step in range(steps):
-            traci.simulationStep()
+            conn.simulationStep()
             if step % sample_interval == 0 or step == steps - 1:
                 # Write progress file for frontend polling
                 if self.scenario_id is not None:
@@ -326,16 +342,25 @@ class SUMOTraCIInterface:
             from simulation.simulation_runner import SyntheticSimulator
             return SyntheticSimulator(self.G, self.duration_s, self.seed).run()
 
-        if not self.start():
-            log.warning("Could not start SUMO — falling back to synthetic simulator.")
+        if not _SUMO_LOCK.acquire(timeout=600):
+            log.error("Could not acquire SUMO lock within 10 minutes — another simulation is still running.")
             from simulation.simulation_runner import SyntheticSimulator
             return SyntheticSimulator(self.G, self.duration_s, self.seed).run()
 
         try:
-            snapshots = self.run_steps()
-            result = self._aggregate(snapshots)
+            if not self.start():
+                log.warning("Could not start SUMO — falling back to synthetic simulator.")
+                _SUMO_LOCK.release()
+                from simulation.simulation_runner import SyntheticSimulator
+                return SyntheticSimulator(self.G, self.duration_s, self.seed).run()
+
+            try:
+                snapshots = self.run_steps()
+                result = self._aggregate(snapshots)
+            finally:
+                self.stop()
         finally:
-            self.stop()
+            _SUMO_LOCK.release()
             if self.scenario_id is not None:
                 progress_file = ROOT / "data" / f"progress_{self.scenario_id}.json"
                 if progress_file.exists():
@@ -355,21 +380,35 @@ class SUMOTraCIInterface:
         import numpy as np
         log.info(f"Aggregating {len(snapshots)} simulation steps …")
         
+        # Pre-group snapshot values by edge_id (highly optimized O(E + S) pass)
+        edge_data_accum = {}
+        for snap in snapshots:
+            for edge_id, stats in snap.items():
+                if edge_id not in edge_data_accum:
+                    edge_data_accum[edge_id] = {
+                        "speeds": [], "occupancies": [], "counts": [], "wait_times": []
+                    }
+                accum = edge_data_accum[edge_id]
+                accum["speeds"].append(stats["mean_speed"])
+                accum["occupancies"].append(stats["occupancy"])
+                accum["counts"].append(stats["vehicle_count"])
+                accum["wait_times"].append(stats["waiting_time"])
+
         edges_out = []
         for u, v, k, data in self.G.edges(data=True, keys=True):
             edge_id = f"{u}_{v}_{k}"
             
-            speeds = []
-            occupancies = []
-            counts = []
-            wait_times = []
-            
-            for snap in snapshots:
-                if edge_id in snap:
-                    speeds.append(snap[edge_id]["mean_speed"])
-                    occupancies.append(snap[edge_id]["occupancy"])
-                    counts.append(snap[edge_id]["vehicle_count"])
-                    wait_times.append(snap[edge_id]["waiting_time"])
+            accum = edge_data_accum.get(edge_id)
+            if accum:
+                speeds = accum["speeds"]
+                occupancies = accum["occupancies"]
+                counts = accum["counts"]
+                wait_times = accum["wait_times"]
+            else:
+                speeds = []
+                occupancies = []
+                counts = []
+                wait_times = []
             
             # If no data collected (e.g. no vehicles traversed), fall back to base road specs
             avg_speed_sim = np.mean(speeds) * 3.6 if speeds else float(data.get("speed_kph", 40))

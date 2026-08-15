@@ -29,7 +29,11 @@ import time
 from pathlib import Path
 
 import networkx as nx
-import osmnx as ox
+try:
+    import osmnx as ox
+except ImportError:
+    ox = None
+
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -59,6 +63,12 @@ log = logging.getLogger("osm_to_network")
 
 def _configure_osmnx() -> None:
     """Apply project-wide OSMnx settings."""
+    if ox is None:
+        raise RuntimeError(
+            "OSMnx is not installed in the active Python environment. "
+            "Please run the server inside the virtual environment: .\\venv\\Scripts\\Activate.ps1 "
+            "or install osmnx using 'pip install osmnx'."
+        )
     ox.settings.log_console = False
     ox.settings.use_cache = True
     ox.settings.cache_folder = str(CACHE_DIR)
@@ -72,6 +82,12 @@ def _configure_osmnx() -> None:
 
 def download_by_place(place_name: str) -> nx.MultiDiGraph:
     """Download the drivable road network for *place_name*."""
+    # Normalize place name
+    norm_name = place_name.lower().strip()
+    if norm_name in ["bengaluru", "bangalore", "bengaluru, karnataka, india", "bangalore, karnataka, india"]:
+        place_name = "Indiranagar, Bengaluru, Karnataka, India"
+        log.info(f"Metropolitan query redirected to sub-district: {place_name!r} to avoid timeouts")
+
     log.info(f"Downloading road network for: {place_name!r}")
     G = ox.graph_from_place(
         place_name,
@@ -329,6 +345,7 @@ def build_network(
     city: str | None = None,
     bbox: tuple[float, float, float, float] | None = None,
     force_rebuild: bool = False,
+    scenario_id: int | None = None,
 ) -> dict:
     """
     High-level function: download, enrich, and save the road network.
@@ -341,17 +358,30 @@ def build_network(
     """
     _configure_osmnx()
 
-    graphml_path = PROCESSED_DIR / "network.graphml"
-    geojson_path = PROCESSED_DIR / "network.geojson"
-    nodes_path   = PROCESSED_DIR / "nodes.geojson"
-    meta_path    = PROCESSED_DIR / "network_meta.json"
+    if scenario_id:
+        scenario_dir = PROCESSED_DIR / str(scenario_id)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        graphml_path = scenario_dir / "network.graphml"
+        geojson_path = scenario_dir / "network.geojson"
+        nodes_path   = scenario_dir / "nodes.geojson"
+        meta_path    = scenario_dir / "network_meta.json"
+    else:
+        graphml_path = PROCESSED_DIR / "network.graphml"
+        geojson_path = PROCESSED_DIR / "network.geojson"
+        nodes_path   = PROCESSED_DIR / "nodes.geojson"
+        meta_path    = PROCESSED_DIR / "network_meta.json"
 
-    # If processed network already exists and rebuild is not forced, skip download
-    if not force_rebuild and graphml_path.exists():
-        log.info("Processed network already exists. Loading from cache …")
-        G = ox.load_graphml(str(graphml_path))
-        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        return meta
+    target_source = f"bbox:{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}" if bbox else (city or os.getenv("CITY_PLACE_NAME", "Davanagere, Karnataka, India"))
+
+    # If processed network for the exact target_source already exists and rebuild is not forced, skip download
+    if not force_rebuild and graphml_path.exists() and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            if meta.get("source") == target_source:
+                log.info(f"Processed network for {target_source!r} (Scenario {scenario_id}) already exists. Loading from cache …")
+                return meta
+        except Exception as e:
+            log.warning(f"Failed reading cache metadata: {e}")
 
     t0 = time.time()
 
@@ -373,6 +403,15 @@ def build_network(
     save_geojson(G, geojson_path)
     save_nodes_geojson(G, nodes_path)
     meta = save_metadata(G, meta_path, source)
+
+    # Pre-build city signals GeoJSON to avoid writes on subsequent GET requests
+    if scenario_id:
+        try:
+            from backend.api.routes_dashboard import get_signals_geojson
+            get_signals_geojson(scenario_id=scenario_id, refresh=True)
+            log.info(f"Pre-built signals GeoJSON for Scenario {scenario_id}.")
+        except Exception as sig_err:
+            log.warning(f"Could not pre-build signals GeoJSON during network creation: {sig_err}")
 
     elapsed = time.time() - t0
     log.info(f"Network build complete in {elapsed:.1f}s — {meta['nodes']} nodes, {meta['edges']} edges.")

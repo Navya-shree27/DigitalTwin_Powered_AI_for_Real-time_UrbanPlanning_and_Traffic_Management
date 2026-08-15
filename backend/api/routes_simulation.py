@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.database.db_connector import get_db
-from backend.models.schema import Scenario, SimulationRun
+from backend.models.schema import Issue, Proposal, Scenario, SimulationRun, ValidationResult
 
 log = logging.getLogger("routes_simulation")
 router = APIRouter(prefix="/api/scenarios", tags=["Simulation"])
@@ -91,39 +91,11 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             detect_lane_issues(telemetry)
         )
 
-        # ── Proposal generation ────────────────────────────────────────────────
-        from ai.proposal_generator.signal_timing_optimizer import generate_signal_proposals
-        from ai.proposal_generator.lane_change_recommender import generate_lane_proposals
-        from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
-
-        all_proposals = (
-            generate_signal_proposals(all_issues, telemetry) +
-            generate_lane_proposals(all_issues, telemetry) +
-            generate_diversion_proposals(all_issues, telemetry)
-        )
-
-        # ── LLM agent analysis ────────────────────────────────────────────────
-        try:
-            from ai.city_inspector_agent.llm_agent import CityInspectorAgent
-            scenario = db.query(Scenario).get(scenario_id)
-            agent = CityInspectorAgent()
-            agent_result = agent.analyze(
-                scenario_id=scenario_id,
-                scenario_name=scenario.name if scenario else "Unknown",
-                telemetry=telemetry,
-                issues=all_issues,
-            )
-        except Exception as e:
-            log.warning(f"LLM agent failed (non-critical): {e}")
-            agent_result = {"narrative": "Agent analysis unavailable.", "top_issues": []}
-
-        # ── Persist to DB ─────────────────────────────────────────────────────
+        # ── Fast DB Commit: Mark run DONE & stream metrics to user UI ────────
         from backend.models.schema import Issue, Proposal
 
-        # Update run record
         run.status = "done"
         run.finished_at = datetime.now(timezone.utc)
-        run.agent_narrative = agent_result.get("narrative") if "agent_result" in locals() else None
         run.set_telemetry(telemetry)
         run.avg_travel_time_s = metrics.get("avg_travel_time_s")
         run.avg_wait_time_s   = metrics.get("avg_wait_time_s")
@@ -137,7 +109,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             run.noise_pollution_db = metrics.get("noise_pollution_db")
         db.add(run)
 
-        # Persist issues (cap at 200 to avoid DB bloat in Phase A)
+        # Persist issues (cap at 200)
         for issue_data in all_issues[:200]:
             issue = Issue(
                 run_id      = run_id,
@@ -150,6 +122,45 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
                 metrics_json  = json.dumps(issue_data.get("metrics", {})),
             )
             db.add(issue)
+
+        db.commit()
+
+        # Update progress JSON file to 100% DONE so frontend polling unlocks UI immediately
+        progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
+        try:
+            with open(progress_file, "w") as pf:
+                json.dump({"progress": 100, "status": "done", "step": duration_s, "total": duration_s}, pf)
+        except Exception:
+            pass
+
+        log.info(f"Simulation telemetry & issues ready for run {run_id}. UI unlocked.")
+
+        # ── Proposal generation & AI Agent analysis ───────────────────────────
+        from ai.proposal_generator.signal_timing_optimizer import generate_signal_proposals
+        from ai.proposal_generator.lane_change_recommender import generate_lane_proposals
+        from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
+
+        all_proposals = (
+            generate_signal_proposals(all_issues, telemetry) +
+            generate_lane_proposals(all_issues, telemetry) +
+            generate_diversion_proposals(all_issues, telemetry)
+        )
+
+        try:
+            from ai.city_inspector_agent.llm_agent import CityInspectorAgent
+            scenario = db.query(Scenario).get(scenario_id)
+            agent = CityInspectorAgent()
+            agent_result = agent.analyze(
+                scenario_id=scenario_id,
+                scenario_name=scenario.name if scenario else "Unknown",
+                telemetry=telemetry,
+                issues=all_issues,
+            )
+            if agent_result.get("narrative"):
+                run.agent_narrative = agent_result.get("narrative")
+                db.add(run)
+        except Exception as e:
+            log.warning(f"LLM agent failed (non-critical): {e}")
 
         # Persist proposals (cap at 50)
         for prop_data in all_proposals[:50]:
@@ -165,7 +176,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             db.add(proposal)
 
         db.commit()
-        log.info(f"Pipeline complete: run {run_id} — {len(all_issues)} issues, {len(all_proposals)} proposals.")
+        log.info(f"Pipeline complete: run {run_id} — {len(all_issues)} issues, {len(all_proposals)} proposals saved.")
 
     except Exception as e:
         log.error(f"Pipeline failed for run {run_id}: {e}", exc_info=True)
@@ -179,27 +190,79 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@router.post("/reset", tags=["System"])
+def reset_system(db: Session = Depends(get_db)) -> dict:
+    """Reset DB, delete all stale runs/proposals/validations, and clear caches."""
+    from backend.database.db_connector import Base, engine, init_db
+    try:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        init_db()
+
+        # Delete progress files and report JSONs
+        data_dir = ROOT / "data"
+        for pf in data_dir.glob("progress_*.json"):
+            try:
+                pf.unlink()
+            except Exception:
+                pass
+
+        reports_json_dir = ROOT / "data" / "processed" / "reports"
+        if reports_json_dir.exists():
+            for rf in reports_json_dir.glob("*.json"):
+                try:
+                    rf.unlink()
+                except Exception:
+                    pass
+
+        log.info("System reset complete: DB tables re-created and stale telemetry cleared.")
+        return {"status": "ok", "message": "Database and telemetry caches completely reset."}
+    except Exception as e:
+        log.error(f"Reset failed: {e}")
+        raise HTTPException(500, f"Reset failed: {e}")
+
+
 @router.post("", status_code=201)
 def create_scenario(body: ScenarioCreate, db: Session = Depends(get_db)) -> dict:
     """Create a new scenario and trigger OSM data download."""
-    from simulation.osm_to_network import build_network
-    meta = build_network(city=body.city, force_rebuild=body.force_rebuild)
-
+    # 1. Instantiate and commit the scenario to get a database ID first
     scenario = Scenario(
         name        = body.name,
         city        = body.city,
         description = body.description,
-        bbox_north  = meta.get("bbox", {}).get("north"),
-        bbox_south  = meta.get("bbox", {}).get("south"),
-        bbox_east   = meta.get("bbox", {}).get("east"),
-        bbox_west   = meta.get("bbox", {}).get("west"),
-        n_nodes     = meta.get("nodes"),
-        n_edges     = meta.get("edges"),
+        n_nodes     = 0,
+        n_edges     = 0,
     )
     db.add(scenario)
     db.commit()
     db.refresh(scenario)
-    log.info(f"Created scenario {scenario.id}: {scenario.name}")
+
+    try:
+        from simulation.osm_to_network import build_network
+        meta = build_network(
+            city=body.city,
+            force_rebuild=body.force_rebuild,
+            scenario_id=scenario.id
+        )
+    except Exception as err:
+        log.error(f"Failed to build network for scenario '{body.name}' (ID {scenario.id}): {err}")
+        # Clean up scenario if network download fails
+        db.delete(scenario)
+        db.commit()
+        raise HTTPException(500, f"Network build failed: {err}")
+
+    # 2. Populate scenario details from built network metadata
+    scenario.bbox_north  = meta.get("bbox", {}).get("north")
+    scenario.bbox_south  = meta.get("bbox", {}).get("south")
+    scenario.bbox_east   = meta.get("bbox", {}).get("east")
+    scenario.bbox_west   = meta.get("bbox", {}).get("west")
+    scenario.n_nodes     = meta.get("nodes")
+    scenario.n_edges     = meta.get("edges")
+    db.add(scenario)
+    db.commit()
+    db.refresh(scenario)
+
+    log.info(f"Successfully created and built scenario {scenario.id}: {scenario.name} for city {scenario.city}")
     return {"scenario": scenario.to_dict(), "network_meta": meta}
 
 
@@ -215,6 +278,35 @@ def get_scenario(scenario_id: int, db: Session = Depends(get_db)) -> dict:
     if not scenario:
         raise HTTPException(404, f"Scenario {scenario_id} not found.")
     return {"scenario": scenario.to_dict()}
+
+
+@router.delete("/{scenario_id}")
+def delete_scenario(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    """Delete scenario and all associated simulation runs, issues, proposals, and results."""
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    runs = db.query(SimulationRun).filter(SimulationRun.scenario_id == scenario_id).all()
+    for r in runs:
+        db.query(ValidationResult).filter(ValidationResult.scenario_id == scenario_id).delete()
+        db.query(Proposal).filter(Proposal.run_id == r.id).delete()
+        db.query(Issue).filter(Issue.run_id == r.id).delete()
+        db.delete(r)
+
+    db.delete(scenario)
+    db.commit()
+
+    # Clear progress file
+    pf = ROOT / "data" / f"progress_{scenario_id}.json"
+    if pf.exists():
+        try:
+            pf.unlink()
+        except Exception:
+            pass
+
+    log.info(f"Deleted scenario {scenario_id} and all associated records.")
+    return {"status": "ok", "message": f"Scenario {scenario_id} deleted successfully."}
 
 
 @router.post("/{scenario_id}/simulate", status_code=202)
@@ -320,7 +412,7 @@ def test_custom_config(
 
     # Load graph and apply junction type changes (install/remove signals, lanes, footpaths, dustbins)
     from simulation.simulation_runner import load_graph, run_simulation
-    G = load_graph()
+    G = load_graph(scenario_id)
     G_modified = G.copy()
     for override in body.overrides:
         nid = override.node_id
@@ -430,7 +522,7 @@ def optimize_node_signal(
         raise HTTPException(400, "No baseline simulation found. Run a simulation first.")
 
     from simulation.simulation_runner import load_graph
-    G = load_graph()
+    G = load_graph(scenario_id)
 
     if node_id not in G.nodes:
         raise HTTPException(404, f"Node {node_id} not found in network graph.")
@@ -514,7 +606,7 @@ def ai_redesign(scenario_id: int, node_id: int, db: Session = Depends(get_db)) -
         raise HTTPException(400, "No baseline simulation found. Run a simulation first.")
 
     from simulation.simulation_runner import load_graph
-    G = load_graph()
+    G = load_graph(scenario_id)
 
     found_key = None
     if str(node_id) in G.nodes:

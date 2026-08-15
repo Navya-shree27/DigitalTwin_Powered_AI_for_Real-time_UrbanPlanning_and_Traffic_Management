@@ -86,13 +86,38 @@ log = logging.getLogger("simulation_runner")
 # Graph loading
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_graph() -> nx.MultiDiGraph:
+def load_graph(scenario_id: int | None = None) -> nx.MultiDiGraph:
     """Load the processed road network GraphML, building it first if absent."""
-    graphml_path = PROCESSED_DIR / "network.graphml"
+    if scenario_id:
+        scenario_dir = PROCESSED_DIR / str(scenario_id)
+        graphml_path = scenario_dir / "network.graphml"
+        if not graphml_path.exists():
+            log.info(f"No processed network found for scenario {scenario_id} — querying city name from DB …")
+            from backend.database.db_connector import SessionLocal
+            from backend.models.schema import Scenario
+            db = SessionLocal()
+            try:
+                scenario = db.query(Scenario).get(scenario_id)
+                if scenario:
+                    log.info(f"Auto-building network for scenario {scenario_id} ({scenario.city}) …")
+                    from simulation.osm_to_network import build_network
+                    build_network(city=scenario.city, scenario_id=scenario_id)
+            except Exception as e:
+                log.warning(f"Could not automatically build network for scenario {scenario_id}: {e}")
+            finally:
+                db.close()
+    else:
+        graphml_path = PROCESSED_DIR / "network.graphml"
+
+    # Default fallback to global if still doesn't exist
     if not graphml_path.exists():
-        log.info("No processed network found — triggering osm_to_network build …")
+        graphml_path = PROCESSED_DIR / "network.graphml"
+
+    if not graphml_path.exists():
+        log.info("No processed network found — triggering default osm_to_network build …")
         from simulation.osm_to_network import build_network
         build_network()
+
     log.info(f"Loading graph from {graphml_path}")
     G = ox.load_graphml(str(graphml_path))
     
@@ -173,40 +198,46 @@ class SyntheticSimulator:
 
             free_flow_tt = (length_m / 1000) / speed_kph * 3600  # seconds
 
-            # Degree-weighted base demand: busier nodes → more flow
-            avg_degree  = (self._degree_cache.get(u, 2) + self._degree_cache.get(v, 2)) / 2
+            # Degree-weighted base demand (vehicles/hour): busier nodes -> higher demand
+            avg_degree   = (self._degree_cache.get(u, 2) + self._degree_cache.get(v, 2)) / 2
             degree_scale = min(avg_degree / 4.0, 1.0)
-            noise = float(np.random.normal(0, 0.08))
+            noise        = float(np.random.normal(0, 0.08))
 
-            flow_ratio = float(np.clip(demand_mult * degree_scale + noise, 0.05, 1.15))
-            flow       = flow_ratio * capacity  # vehicles / hour
+            # Base demand volume (veh/h) independent of edge capacity
+            demand_ratio   = float(np.clip(demand_mult * degree_scale + noise, 0.15, 1.25))
+            traffic_demand = demand_ratio * 900.0  # vehicles / hour demand
 
-            # BPR
-            sim_tt     = self._bpr_travel_time(free_flow_tt, flow, capacity)
-            sim_speed  = (length_m / 1000) / (sim_tt / 3600) if sim_tt > 0 else speed_kph
+            # Apply edge demand modifier if route diversion proposal applied
+            demand_modifier = float(data.get("demand_modifier", 1.0))
+            flow = max(10.0, traffic_demand * demand_modifier)
+
+            # BPR speed-flow curve: travel time increases nonlinearly with flow/capacity ratio
+            sim_tt    = self._bpr_travel_time(free_flow_tt, flow, capacity)
+            sim_speed = (length_m / 1000.0) / (sim_tt / 3600.0) if sim_tt > 0 else speed_kph
 
             # Derived metrics
-            density    = flow / max(sim_speed, 1)            # veh/km  (Greenshields)
-            queue      = max(0.0, (flow_ratio - 0.75) * capacity * 0.02)  # veh
-            wait_time  = max(0.0, (sim_tt - free_flow_tt) + float(np.random.exponential(2)))
-            occupancy  = float(np.clip(flow / capacity, 0, 1))
+            density   = flow / max(sim_speed, 1.0)  # veh/km
+            flow_ratio = flow / max(capacity, 1.0)
+            queue     = max(0.0, (flow_ratio - 0.75) * capacity * 0.02)  # veh
+            wait_time = max(0.0, (sim_tt - free_flow_tt) + float(np.random.exponential(1.5)))
+            occupancy = float(np.clip(flow_ratio, 0.0, 1.0))
 
             records.append({
-                "edge_id":    edge_id,
-                "u":          int(u),
-                "v":          int(v),
-                "length_m":   round(length_m, 1),
-                "road_type":  road_type,
-                "lanes":      lanes,
-                "speed_kph":  round(speed_kph, 1),
-                "capacity":   int(capacity),
-                "flow":       round(flow, 2),
-                "speed_sim":  round(max(sim_speed, 1), 2),
-                "density":    round(density, 3),
+                "edge_id":      edge_id,
+                "u":            int(u),
+                "v":            int(v),
+                "length_m":     round(length_m, 1),
+                "road_type":    road_type,
+                "lanes":        lanes,
+                "speed_kph":    round(speed_kph, 1),
+                "capacity":     int(capacity),
+                "flow":         round(flow, 2),
+                "speed_sim":    round(max(sim_speed, 1.0), 2),
+                "density":      round(density, 3),
                 "queue_length": round(queue, 2),
-                "wait_time":  round(wait_time, 2),
-                "travel_time": round(sim_tt, 2),
-                "occupancy":  round(occupancy, 4),
+                "wait_time":    round(wait_time, 2),
+                "travel_time":  round(sim_tt, 2),
+                "occupancy":    round(occupancy, 4),
             })
         return records
 
@@ -234,10 +265,12 @@ class SyntheticSimulator:
             # Calculate wait modifier based on applied signal timing proposals
             wait_modifier = 1.0
             for p in self.apply_proposals:
-                if p.get("type") == "signal_timing" and int(p.get("location", {}).get("node_id", 0)) == int(node_id):
+                ptype = p.get("type", "")
+                p_node = p.get("node_id") or p.get("node") or p.get("location", {}).get("node_id")
+                if ptype == "signal_timing" and p_node is not None and int(p_node) == int(node_id):
                     imp = p.get("expected_improvement", {})
                     reduction = float(imp.get("expected_wait_reduction_pct", 25))
-                    wait_modifier *= (1.0 - reduction / 100)
+                    wait_modifier *= (1.0 - reduction / 100.0)
 
             avg_wait = float(np.clip(
                 (np.random.gamma(2, scale=5) + (avg_flow / 1000 * 8)) * wait_modifier, 0, 120
@@ -353,7 +386,7 @@ def run_simulation(
     log.info(f"Starting simulation — scenario={scenario_id}, engine={engine}, duration={duration_s}s, seed={seed}")
 
     if G is None:
-        G = load_graph()
+        G = load_graph(scenario_id)
 
     # Apply any proposals to the graph (e.g. speed/lane changes)
     if apply_proposals:
@@ -384,15 +417,16 @@ def _apply_proposals_to_graph(
     """
     Apply a list of proposals to graph attributes before simulation.
     Supported proposal types:
-      - signal_timing  : modifies node wait times (not directly on graph)
-      - lane_change    : modifies edge lane count
-      - route_diversion: modifies edge speed_kph (to discourage)
+      - signal_timing  : modifies node wait times
+      - lane_change    : modifies edge lane count / capacity / speed
+      - route_diversion: redirects traffic demand from congested corridors
     """
     G = G.copy()
     for p in proposals:
         ptype = p.get("type", "")
         if ptype == "lane_change":
-            edge = p.get("edge")
+            edge = p.get("edge") or p.get("congested_edge") or p.get("location", {}).get("edge_id")
+            action = p.get("action", "")
             if edge and "_" in str(edge):
                 parts = str(edge).split("_")
                 if len(parts) >= 2:
@@ -400,20 +434,34 @@ def _apply_proposals_to_graph(
                         u, v = int(parts[0]), int(parts[1])
                         if G.has_edge(u, v):
                             for k in G[u][v]:
-                                G[u][v][k]["lanes"] = int(p.get("new_lanes", G[u][v][k].get("lanes", 1)))
-                                G[u][v][k]["capacity"] = G[u][v][k]["lanes"] * 900
+                                cur_lanes = int(G[u][v][k].get("lanes", 1))
+                                if action == "ADD_LANE" or "new_lanes" in p:
+                                    new_lanes = int(p.get("new_lanes", cur_lanes + 1))
+                                    G[u][v][k]["lanes"] = new_lanes
+                                    G[u][v][k]["capacity"] = new_lanes * 900
+                                elif action == "REMOVE_LANE":
+                                    new_lanes = int(p.get("new_lanes", max(1, cur_lanes - 1)))
+                                    G[u][v][k]["lanes"] = new_lanes
+                                    G[u][v][k]["capacity"] = new_lanes * 900
+                                elif action == "REPURPOSE_LANE":
+                                    # Dynamic tidal flow / transit lane increases capacity & speed
+                                    G[u][v][k]["capacity"] = int(G[u][v][k].get("capacity", cur_lanes * 900) * 1.30)
+                                    G[u][v][k]["speed_kph"] = float(G[u][v][k].get("speed_kph", 40.0)) * 1.15
                     except (ValueError, KeyError):
                         pass
+
         elif ptype == "route_diversion":
-            edge = p.get("edge")
+            edge = p.get("congested_edge") or p.get("edge") or p.get("location", {}).get("edge_id")
             if edge and "_" in str(edge):
                 parts = str(edge).split("_")
                 try:
                     u, v = int(parts[0]), int(parts[1])
                     if G.has_edge(u, v):
                         for k in G[u][v]:
-                            # Slow down the edge to discourage use
-                            G[u][v][k]["speed_kph"] = float(G[u][v][k].get("speed_kph", 40)) * 0.5
+                            # Divert demand away from congested edge (reduces flow on this edge)
+                            G[u][v][k]["demand_modifier"] = 0.60
+                            G[u][v][k]["capacity"] = int(G[u][v][k].get("capacity", 800) * 1.20)
                 except (ValueError, KeyError):
                     pass
+
     return G

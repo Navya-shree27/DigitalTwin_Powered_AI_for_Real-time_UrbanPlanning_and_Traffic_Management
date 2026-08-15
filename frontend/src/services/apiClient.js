@@ -29,6 +29,8 @@ export const scenariosApi = {
 
   get: (id) => api.get(`/scenarios/${id}`),
 
+  delete: (id) => api.delete(`/scenarios/${id}`),
+
   create: (payload) =>
     api.post('/scenarios', {
       name:          payload.name,
@@ -75,6 +77,8 @@ export const dashboardApi = {
     api.get(`/dashboard/${scenarioId}/geojson/network?t=${Date.now()}`),
   getNodesGeoJson: (scenarioId) =>
     api.get(`/dashboard/${scenarioId}/geojson/nodes?t=${Date.now()}`),
+  getSignalsGeoJson: (scenarioId, refresh = false) =>
+    api.get(`/dashboard/${scenarioId}/geojson/signals${refresh ? '?refresh=true' : ''}`),
   getTelemetry: (scenarioId) =>
     api.get(`/dashboard/${scenarioId}/telemetry?t=${Date.now()}`),
 }

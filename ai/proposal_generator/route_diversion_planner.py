@@ -94,42 +94,23 @@ class RouteDiversionPlanner:
                 counter += 1
                 continue
 
-            # Find alternative paths
+            # Find alternative paths (fast Dijkstra on graph with congested edge removed)
             try:
-                # Use a simple DiGraph copy for k-shortest paths
                 DG = nx.DiGraph()
                 for pu, pv, data in G.edges(data=True):
-                    w = data.get("travel_time", data.get("length", 100) / 10)
+                    w = float(data.get("travel_time", data.get("length", 100) / 10))
                     DG.add_edge(pu, pv, weight=w)
 
-                # Inflate congested edge weight
+                # Remove the congested edge (u -> v) to force finding a detour
                 if DG.has_edge(u, v):
-                    DG[u][v]["weight"] *= 10
+                    DG.remove_edge(u, v)
 
-                # Direct path length (for comparison)
-                try:
-                    direct_len = nx.shortest_path_length(DG, u, v, weight="weight")
-                except nx.NetworkXNoPath:
-                    direct_len = None
-
-                # K-shortest paths generator
-                path_generator = nx.shortest_simple_paths(DG, u, v, weight="weight")
-                alt_paths = []
-                for _ in range(self.k_paths + 2):
-                    try:
-                        alt_paths.append(next(path_generator))
-                    except (StopIteration, nx.NetworkXNoPath):
-                        break
-
-                # Filter: skip paths through the congested edge
-                valid_alts = []
-                if len(alt_paths) > 1:
-                    for path in alt_paths[1:]:
-                        edges_in_path = list(zip(path[:-1], path[1:]))
-                        if (u, v) not in edges_in_path:
-                            path_len = sum(DG[a][b]["weight"] / 10 for a, b in edges_in_path)
-                            if direct_len is None or path_len <= direct_len * self.max_detour_ratio:
-                                valid_alts.append((path, path_len))
+                if nx.has_path(DG, u, v):
+                    best_path = nx.shortest_path(DG, u, v, weight="weight")
+                    best_len  = nx.shortest_path_length(DG, u, v, weight="weight")
+                    valid_alts = [(best_path, best_len)]
+                else:
+                    valid_alts = []
 
             except Exception as e:
                 log.warning(f"Path search failed for edge {edge_id}: {e}")

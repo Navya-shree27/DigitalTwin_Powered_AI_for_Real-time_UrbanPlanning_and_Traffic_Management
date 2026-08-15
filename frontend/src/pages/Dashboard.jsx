@@ -3,6 +3,7 @@ import MapView from '../components/MapView/MapView.jsx'
 import MetricsPanel from '../components/MetricsPanel/MetricsPanel.jsx'
 import IssueList from '../components/IssueList/IssueList.jsx'
 import BeforeAfterToggle from '../components/BeforeAfterToggle/BeforeAfterToggle.jsx'
+import ScenarioDropdown from '../components/ScenarioDropdown/ScenarioDropdown.jsx'
 import { scenariosApi, dashboardApi, proposalsApi } from '../services/apiClient.js'
 import './Dashboard.css'
 
@@ -43,6 +44,25 @@ export default function Dashboard() {
       setError('Could not reach backend. Is the API running?')
     }
   }, [activeScenarioId])
+
+  const handleDeleteScenario = async (scenarioId) => {
+    try {
+      await scenariosApi.delete(scenarioId)
+      const res = await scenariosApi.list()
+      const list = res.scenarios || []
+      setScenarios(list)
+      if (activeScenarioId === scenarioId) {
+        if (list.length > 0) {
+          setActiveScenarioId(list[0].id)
+        } else {
+          setActiveScenarioId(null)
+          setDashboardData(null)
+        }
+      }
+    } catch (err) {
+      setError(`Failed to delete scenario: ${err.message}`)
+    }
+  }
 
   // ── Load dashboard data ───────────────────────────────────────────────────
   const loadDashboard = useCallback(async (scenarioId) => {
@@ -192,23 +212,19 @@ export default function Dashboard() {
         </div>
 
         <div className="header-center">
-          <select
-            className="scenario-select"
-            value={activeScenarioId || ''}
-            onChange={e => {
-              setActiveScenarioId(Number(e.target.value))
+          <ScenarioDropdown
+            scenarios={scenarios}
+            activeScenarioId={activeScenarioId}
+            onSelectScenario={id => {
+              setActiveScenarioId(id)
               // Reset sandbox state to avoid leakage across scenarios
               setSelectedNode(null)
               setSignalOverrides({})
               setCustomSimResult(null)
               setEditMode(false)
             }}
-          >
-            <option value="" disabled>Select scenario…</option>
-            {scenarios.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
+            onDeleteScenario={handleDeleteScenario}
+          />
           <button
             className="btn btn-ghost"
             onClick={() => setShowNewScenario(true)}
@@ -423,17 +439,14 @@ export default function Dashboard() {
             simRunning={simRunning || customSimLoading}
           />
 
-          {/* Before/after overlay */}
-          {isReady && proposals.length > 0 && selectedIssue && !editMode && (
+          {/* Before/after overlay — always visible when sim is ready and not in sandbox mode */}
+          {isReady && !editMode && (
             <div className="ba-overlay">
               <BeforeAfterToggle
                 view={view}
                 onToggle={setView}
                 metrics={metrics}
-                proposals={proposals.filter(
-                  p => p.issue_id === selectedIssue?.issue_id ||
-                       p.run_id === dashboardData?.run?.id
-                )}
+                proposals={proposals}
                 validatedProposals={dashboardData?.validated_proposals || []}
                 scenarioId={activeScenarioId}
               />
@@ -575,13 +588,30 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
     try {
       const { proposalsApi: pApi } = await import('../services/apiClient.js')
       await pApi.validate(proposal.id)
-      // Poll for result
-      setTimeout(async () => {
-        const data = await pApi.get(proposal.id)
-        setResult(data.validation)
-        onValidated()
-        setValidating(false)
-      }, 3000)
+
+      // Poll for result — retry every 2s for up to 60s (validation re-runs simulation)
+      let attempts = 0
+      const MAX_ATTEMPTS = 30
+      const pollInterval = setInterval(async () => {
+        attempts++
+        try {
+          const data = await pApi.get(proposal.id)
+          if (data.validation) {
+            clearInterval(pollInterval)
+            setResult(data.validation)
+            onValidated()
+            setValidating(false)
+          } else if (attempts >= MAX_ATTEMPTS) {
+            clearInterval(pollInterval)
+            setValidating(false)
+          }
+        } catch {
+          if (attempts >= MAX_ATTEMPTS) {
+            clearInterval(pollInterval)
+            setValidating(false)
+          }
+        }
+      }, 2000)
     } catch {
       setValidating(false)
     }
@@ -597,7 +627,7 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
           </div>
         </div>
         {proposal.validated && (
-          <span className={`badge badge-${result?.verdict === 'APPROVED' ? 'approved' : 'rejected'}`}>
+          <span className={`badge badge-${result?.verdict === 'APPROVED' ? 'approved' : result?.verdict === 'APPROVED_WITH_CONDITIONS' ? 'moderate' : 'rejected'}`}>
             {result?.verdict || 'Validated'}
           </span>
         )}
@@ -623,7 +653,7 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
           disabled={validating}
           id={`btn-validate-${proposal.id}`}
         >
-          {validating ? <><div className="spinner" style={{width:14,height:14}} /> Validating…</> : '⚡ Validate Proposal'}
+          {validating ? <><div className="spinner" style={{width:14,height:14}} /> Validating (may take ~30s)…</> : '⚡ Validate Proposal'}
         </button>
       )}
     </div>

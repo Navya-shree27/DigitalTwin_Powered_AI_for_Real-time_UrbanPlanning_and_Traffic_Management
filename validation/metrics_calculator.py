@@ -126,6 +126,9 @@ def compute_metrics(telemetry: dict) -> dict:
     else:
         los = "F"
 
+    eff_score = 100.0 - (active_congestion_ratio * 40.0) - (min(avg_wait, 60.0) / 60.0 * 30.0)
+    efficiency_score = round(float(np.clip(eff_score, 0.0, 100.0)), 1)
+
     metrics = {
         "avg_travel_time_s":   round(float(np.mean(active_travel_times)), 2),
         "p85_travel_time_s":   round(float(np.percentile(active_travel_times, 85)), 2),

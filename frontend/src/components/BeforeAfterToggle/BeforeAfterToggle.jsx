@@ -33,6 +33,7 @@ export default function BeforeAfterToggle({
             className={`toggle-option ${view === 'after' ? 'active' : ''}`}
             onClick={() => onToggle('after')}
             disabled={validatedProposals.length === 0}
+            title={validatedProposals.length === 0 ? 'Validate a proposal in the right panel first' : 'View proposal comparison'}
             id="toggle-after"
           >
             With Proposal
@@ -108,8 +109,11 @@ export default function BeforeAfterToggle({
           <BaselineMetric label="Speed"      value={metrics?.avg_speed_kph?.toFixed(1) || '--'}  unit="km/h" />
           <BaselineMetric label="Wait"       value={metrics?.avg_wait_time_s?.toFixed(0) || '--'} unit="sec" />
           <BaselineMetric label="Congestion" value={`${((metrics?.congestion_ratio || 0) * 100).toFixed(1)}`} unit="%" />
-          {validatedProposals.length === 0 && (
-            <p className="ba-hint">Validate a proposal to see before/after comparison</p>
+          {validatedProposals.length === 0 && proposals.length > 0 && (
+            <p className="ba-hint">Click <strong>⚡ Validate Proposal</strong> in the right panel to unlock before/after comparison</p>
+          )}
+          {validatedProposals.length === 0 && proposals.length === 0 && (
+            <p className="ba-hint">Run a simulation to generate AI proposals</p>
           )}
         </div>
       )}
