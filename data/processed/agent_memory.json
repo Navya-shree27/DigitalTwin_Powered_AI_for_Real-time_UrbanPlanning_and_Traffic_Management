@@ -151,6 +151,42 @@
         "congestion_ratio": 0.0001,
         "severe_issues": 4
       }
+    },
+    {
+      "scenario_id": 6,
+      "cycle": 2,
+      "timestamp": "2026-08-18T15:23:43.720231+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (5 congested edges)\n\u2022 Severe issues detected: 3\n\nTop issues:\n  1. [congestion] Congestion detected on edge 11252513659_5795029128_0 (residential). Simulated\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 29.19,
+        "avg_travel_time_s": 25.67,
+        "congestion_ratio": 0.0001,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 6,
+      "cycle": 3,
+      "timestamp": "2026-08-21T13:34:08.676312+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 26.6 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (3 congested edges)\n\u2022 Severe issues detected: 3\n\nTop issues:\n  1. [congestion] Congestion detected on edge 2460752382_2460752344_0 (residential). Simulated \u2026",
+      "key_metrics": {
+        "avg_speed_kph": 26.6,
+        "avg_travel_time_s": 10.42,
+        "congestion_ratio": 0.0002,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 6,
+      "cycle": 4,
+      "timestamp": "2026-08-22T06:36:50.081134+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 28.7 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.1% (3 congested edges)\n\u2022 Severe issues detected: 2\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1339408130_1336840359_0 (residential). Simulated \u2026",
+      "key_metrics": {
+        "avg_speed_kph": 28.66,
+        "avg_travel_time_s": 7.95,
+        "congestion_ratio": 0.0005,
+        "severe_issues": 2
+      }
     }
   ],
   "5": [
@@ -164,6 +200,18 @@
         "avg_travel_time_s": 25.78,
         "congestion_ratio": 0.0001,
         "severe_issues": 4
+      }
+    },
+    {
+      "scenario_id": 5,
+      "cycle": 2,
+      "timestamp": "2026-09-03T04:23:22.384930+00:00",
+      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 28.7 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (2 congested edges)\n\u2022 Severe issues detected: 2\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1339408130_1336840359_0 (residential). Simulated \u2026",
+      "key_metrics": {
+        "avg_speed_kph": 28.68,
+        "avg_travel_time_s": 7.94,
+        "congestion_ratio": 0.0003,
+        "severe_issues": 2
       }
     }
   ]

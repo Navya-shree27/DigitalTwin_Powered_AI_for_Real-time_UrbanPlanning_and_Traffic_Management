@@ -42,9 +42,51 @@ try:
 except ImportError:
     TRACI_AVAILABLE = False
     log.warning(
-        "TraCI not available (SUMO not installed). "
+        "TraCI not available (pip install eclipse-sumo or traci). "
         "Using synthetic simulation fallback."
     )
+
+
+# ── Lazy SUMO binary detection ──────────────────────────────────────────────
+
+def _get_sumo_info() -> dict:
+    """Return cached SUMO detection result (sumo_detector.detect_sumo)."""
+    try:
+        from simulation.sumo_detector import detect_sumo
+        return detect_sumo()
+    except Exception as exc:
+        log.warning(f"sumo_detector failed: {exc}")
+        return {"available": False, "sumo_bin": None, "netconvert_bin": None}
+
+
+def _emit_progress(scenario_id: int | None, data: dict):
+    if scenario_id is None:
+        return
+    import json
+    import time
+    progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
+    try:
+        current = {}
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r") as f:
+                    current = json.load(f)
+            except Exception:
+                current = {}
+        
+        # Keep track of pipeline start timestamp if available
+        started_timestamp = current.get("started_timestamp")
+        if not started_timestamp:
+            started_timestamp = data.get("started_timestamp") or time.time()
+            data["started_timestamp"] = started_timestamp
+
+        now = time.time()
+        data["elapsed_s"] = round(now - started_timestamp, 1)
+        current.update(data)
+        with open(progress_file, "w") as pf:
+            json.dump(current, pf)
+    except Exception:
+        pass
 
 
 class SUMOTraCIInterface:
@@ -74,6 +116,13 @@ class SUMOTraCIInterface:
 
         sumo_dir = SUMO_CFG.parent
         sumo_dir.mkdir(parents=True, exist_ok=True)
+
+        _emit_progress(self.scenario_id, {
+            "progress": 2,
+            "status": "running",
+            "stage": "building_network",
+            "stage_label": "Compiling SUMO network topology...",
+        })
 
         try:
             log.info("Generating SUMO network and route configurations from graph...")
@@ -150,6 +199,13 @@ class SUMOTraCIInterface:
             subprocess.run(cmd_net, check=True)
             log.info("SUMO network compiled successfully.")
 
+            _emit_progress(self.scenario_id, {
+                "progress": 4,
+                "status": "running",
+                "stage": "generating_routes",
+                "stage_label": "Generating vehicle trips & routing...",
+            })
+
             # 4. Generate random shortest-path vehicle routes using NetworkX
             routes_xml_path = sumo_dir / "routes.rou.xml"
             with open(routes_xml_path, "w", encoding="utf-8") as f:
@@ -205,19 +261,44 @@ class SUMOTraCIInterface:
             log.error(f"Error compiling SUMO network configurations: {e}")
             return False
 
-        # Start TraCI
-        sumo_binary = os.getenv("SUMO_BINARY", "sumo")
-        if sumo_binary == "sumo" or not shutil.which(sumo_binary):
-            sumo_home = os.environ.get("SUMO_HOME", "")
-            if sumo_home:
-                sumo_exe = Path(sumo_home) / "bin" / f"{sumo_binary}.exe"
-                if not sumo_exe.exists():
-                    sumo_exe = Path(sumo_home) / "bin" / sumo_binary
-                if sumo_exe.exists():
-                    sumo_binary = str(sumo_exe)
-                    
+        # Start TraCI — use sumo_detector for reliable binary resolution
+        sumo_info = _get_sumo_info()
+        if not sumo_info["available"] or not sumo_info["sumo_bin"]:
+            log.error(
+                "SUMO binary not found. "
+                "Set SUMO_HOME in .env or install SUMO from https://sumo.dlr.de"
+            )
+            return False
+
+        sumo_binary = sumo_info["sumo_bin"]
+        netconvert_binary = sumo_info.get("netconvert_bin") or "netconvert"
+
+        # Replace ad-hoc netconvert path in the compile step above with detected binary
+        # (The XML files are already written; we just fix the compile call)
+        try:
+            sumo_dir = SUMO_CFG.parent
+            import subprocess
+            cmd_net_fix = [
+                str(netconvert_binary),
+                "--node-files", str(sumo_dir / "nodes.nod.xml"),
+                "--edge-files", str(sumo_dir / "edges.edg.xml"),
+                "--output-file", str(sumo_dir / "network.net.xml"),
+                "--no-warnings", "true"
+            ]
+            subprocess.run(cmd_net_fix, check=True, capture_output=True)
+            log.info("SUMO network compiled via sumo_detector binary.")
+        except Exception as net_err:
+            log.warning(f"netconvert compile (post-start) skipped: {net_err}")
+
+        _emit_progress(self.scenario_id, {
+            "progress": 6,
+            "status": "running",
+            "stage": "simulating",
+            "stage_label": "Starting SUMO TraCI engine...",
+        })
+
         cmd = [
-            sumo_binary,
+            str(sumo_binary),
             "-c", str(SUMO_CFG),
             "--seed", str(self.seed),
             "--no-warnings", "true",
@@ -244,7 +325,7 @@ class SUMOTraCIInterface:
 
     # ── Step loop ─────────────────────────────────────────────────────────────
 
-    def run_steps(self, step_length_s: float = 1.0, sample_interval: int = 10) -> list[dict]:
+    def run_steps(self, step_length_s: float = 1.0, sample_interval: int = 5) -> list[dict]:
         """
         Run simulation step-by-step for self.duration_s seconds, collecting
         per-edge telemetry at sample intervals.
@@ -257,31 +338,49 @@ class SUMOTraCIInterface:
         steps = int(self.duration_s / step_length_s)
         snapshots = []
         import numpy as np
+        import time
 
         conn = traci.getConnection(self._label)
+        step_loop_start = time.time()
+
         for step in range(steps):
             conn.simulationStep()
+            steps_done = step + 1
+
             if step % sample_interval == 0 or step == steps - 1:
-                # Write progress file for frontend polling
-                if self.scenario_id is not None:
-                    import json
-                    progress_pct = int(step / max(steps - 1, 1) * 100)
-                    progress_file = ROOT / "data" / f"progress_{self.scenario_id}.json"
-                    try:
-                        with open(progress_file, "w") as pf:
-                            json.dump({
-                                "progress": progress_pct,
-                                "step": step,
-                                "total_steps": steps,
-                                "status": "running"
-                            }, pf)
-                    except Exception:
-                        pass
+                # Active vehicles in the simulation network
+                veh_ids = []
+                try:
+                    veh_ids = traci.vehicle.getIDList()
+                except Exception:
+                    pass
+
+                # Dynamic step rate and ETA calculation
+                now = time.time()
+                elapsed_loop_s = max(now - step_loop_start, 0.001)
+                steps_per_s = steps_done / elapsed_loop_s
+                remaining_steps = max(steps - steps_done, 0)
+                sim_eta_s = remaining_steps / max(steps_per_s, 0.001)
+                # Post-processing buffer (aggregation + metrics + AI proposal optimization)
+                total_eta_s = sim_eta_s + 3.0 if remaining_steps > 0 else 2.0
+
+                # Map steps to 6% - 85% progress range
+                progress_pct = round(6.0 + (steps_done / max(steps, 1)) * 79.0, 1)
+
+                _emit_progress(self.scenario_id, {
+                    "progress": progress_pct,
+                    "step": steps_done,
+                    "total_steps": steps,
+                    "status": "running",
+                    "stage": "simulating",
+                    "stage_label": f"Simulating TraCI step {steps_done}/{steps} ({steps_per_s:.1f} steps/s)",
+                    "steps_per_s": round(steps_per_s, 1),
+                    "eta_s": max(0.5, round(total_eta_s, 1)),
+                    "active_vehicles": len(veh_ids),
+                })
 
                 snap = {}
                 try:
-                    # Get list of all active vehicles (usually <500) instead of all edges (~45,000)
-                    veh_ids = traci.vehicle.getIDList()
                     edge_vehs = {}
                     for vid in veh_ids:
                         try:
@@ -335,12 +434,23 @@ class SUMOTraCIInterface:
         """
         Full run: start → collect telemetry → stop → aggregate.
 
-        Falls back to SyntheticSimulator if SUMO is not available.
+        Raises RuntimeError if SUMO is explicitly requested but not available.
+        Caller (simulation_runner.py) is responsible for catching this and
+        returning a 503 to the API layer.
         """
         if not TRACI_AVAILABLE:
-            log.warning("Falling back to synthetic simulator.")
-            from simulation.simulation_runner import SyntheticSimulator
-            return SyntheticSimulator(self.G, self.duration_s, self.seed).run()
+            raise RuntimeError(
+                "TraCI Python package not installed. "
+                "Run: pip install eclipse-sumo   (or: pip install traci)"
+            )
+
+        sumo_info = _get_sumo_info()
+        if not sumo_info["available"]:
+            raise RuntimeError(
+                "SUMO binary not found on this machine. "
+                "Install SUMO from https://sumo.dlr.de/docs/Downloads.php "
+                "and set SUMO_HOME in your .env file."
+            )
 
         if not _SUMO_LOCK.acquire(timeout=600):
             log.error("Could not acquire SUMO lock within 10 minutes — another simulation is still running.")
@@ -356,18 +466,18 @@ class SUMOTraCIInterface:
 
             try:
                 snapshots = self.run_steps()
+                _emit_progress(self.scenario_id, {
+                    "progress": 85,
+                    "stage": "aggregating",
+                    "stage_label": "Aggregating telemetry & simulation snapshots...",
+                    "status": "running",
+                    "eta_s": 3.0
+                })
                 result = self._aggregate(snapshots)
             finally:
                 self.stop()
         finally:
             _SUMO_LOCK.release()
-            if self.scenario_id is not None:
-                progress_file = ROOT / "data" / f"progress_{self.scenario_id}.json"
-                if progress_file.exists():
-                    try:
-                        progress_file.unlink()
-                    except Exception:
-                        pass
 
         result["engine"] = "sumo"
         return result

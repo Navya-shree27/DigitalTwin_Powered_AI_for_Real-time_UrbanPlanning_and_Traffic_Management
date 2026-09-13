@@ -211,13 +211,198 @@
 .sim-progress-card {
   margin: 0 18px 18px;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.25);
   border-radius: var(--radius-md);
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
   gap: 12px;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.sim-progress-card.full-timer-card {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(30, 41, 59, 0.75));
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.sim-progress-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sim-progress-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sim-spinner-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sim-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #f8fafc;
+  letter-spacing: -0.01em;
+}
+
+.sim-stage-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* Timer Grid */
+.sim-timer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sim-timer-box {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sim-timer-box.elapsed {
+  border-color: rgba(16, 185, 129, 0.2);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(0, 0, 0, 0.4));
+}
+
+.sim-timer-box.eta {
+  border-color: rgba(56, 189, 248, 0.2);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.08), rgba(0, 0, 0, 0.4));
+}
+
+.sim-timer-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-bottom: 2px;
+}
+
+.sim-timer-value {
+  font-size: 15px;
+  font-weight: 800;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: #f1f5f9;
+}
+
+.sim-timer-value.digital-clock {
+  color: #34d399;
+  text-shadow: 0 0 10px rgba(52, 211, 153, 0.3);
+}
+
+.sim-timer-value.eta-highlight {
+  color: #38bdf8;
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+}
+
+/* Stats Bar */
+.sim-stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 10.5px;
+  color: #cbd5e1;
+  font-family: var(--font-mono, monospace);
+}
+
+.sim-stat-item strong {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Progress bar */
+.sim-bar-wrapper {
+  width: 100%;
+}
+
+.sim-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 4px;
+  font-family: var(--font-mono, monospace);
+  color: #94a3b8;
+}
+
+.sim-bar-pct {
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.sim-bar-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sim-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #06b6d4, #3b82f6);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+}
+
+/* Completion Pill */
+.sim-completed-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.06));
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: #e2e8f0;
+}
+
+.sim-completed-pill .completed-icon {
+  font-size: 13px;
+}
+
+.sim-completed-pill strong {
+  color: #34d399;
+  font-family: var(--font-mono, monospace);
+}
+
+/* Header Status Timer */
+.sim-status-timer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 4px 10px;
+  border-radius: 16px;
+}
+
+.header-timer-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: #86efac;
 }
 
 /* ── Proposals ──────────────────────────────────────────────────────────────── */
@@ -427,3 +612,42 @@
 }
 .sandbox-content::-webkit-scrollbar { width: 4px; }
 .sandbox-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+/* ── Municipal Planner Tab Bar ────────────────────────────────────────────── */
+.sandbox-tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.sandbox-tab-btn {
+  flex: 1;
+  padding: 7px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
+}
+
+.sandbox-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.sandbox-tab-btn.active {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.10));
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+

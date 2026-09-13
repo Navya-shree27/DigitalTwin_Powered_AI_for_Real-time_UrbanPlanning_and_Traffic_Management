@@ -1,1 +1,1 @@
-{"progress": 100, "status": "done", "step": 300, "total": 300}
+{"scenario_id": 5, "run_id": 11, "status": "done", "progress": 100, "stage": "complete", "stage_label": "Simulation and AI optimization complete", "started_at": "2026-09-03T04:18:29.378148+00:00", "started_timestamp": 1788409109.3781486, "step": 300, "total_steps": 300, "elapsed_s": 293.1, "eta_s": 0.0, "steps_per_s": 276.4, "active_vehicles": 9, "completed_at": "2026-09-03T04:23:22.509678+00:00", "total_duration_s": 293.1}

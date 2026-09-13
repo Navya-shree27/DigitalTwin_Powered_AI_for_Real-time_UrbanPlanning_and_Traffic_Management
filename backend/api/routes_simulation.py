@@ -61,10 +61,58 @@ def _load_network_meta() -> dict:
     return {}
 
 
+def _write_progress(scenario_id: int, data: dict):
+    """Write or update simulation progress for a scenario."""
+    import time
+    progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
+    try:
+        current = {}
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r") as f:
+                    current = json.load(f)
+            except Exception:
+                current = {}
+        
+        started_timestamp = current.get("started_timestamp")
+        if not started_timestamp:
+            started_timestamp = data.get("started_timestamp") or time.time()
+            data["started_timestamp"] = started_timestamp
+
+        now = time.time()
+        if "elapsed_s" not in data:
+            data["elapsed_s"] = round(now - started_timestamp, 1)
+
+        current.update(data)
+        with open(progress_file, "w") as pf:
+            json.dump(current, pf)
+    except Exception:
+        pass
+
+
 def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, scenario_id: int):
     """Background task: run simulation + detection + proposals + persist."""
+    import time
     from backend.database.db_connector import SessionLocal
     db = SessionLocal()
+    t_start = time.time()
+    started_at = datetime.now(timezone.utc).isoformat()
+
+    _write_progress(scenario_id, {
+        "scenario_id": scenario_id,
+        "run_id": run_id,
+        "status": "running",
+        "progress": 2,
+        "stage": "initializing",
+        "stage_label": "Initializing simulation & loading network...",
+        "started_at": started_at,
+        "started_timestamp": t_start,
+        "step": 0,
+        "total_steps": duration_s,
+        "elapsed_s": 0.0,
+        "eta_s": None,
+    })
+
     try:
         run = db.query(SimulationRun).get(run_id)
         if not run:
@@ -74,13 +122,45 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
 
         # ── Simulation ────────────────────────────────────────────────────────
         from simulation.simulation_runner import run_simulation
-        telemetry = run_simulation(scenario_id=scenario_id, engine=engine, duration_s=duration_s, seed=seed)
+        try:
+            telemetry = run_simulation(scenario_id=scenario_id, engine=engine, duration_s=duration_s, seed=seed)
+        except RuntimeError as sumo_err:
+            # SUMO binary not installed — mark run as failed and surface the message
+            err_msg = str(sumo_err)
+            log.error(f"Simulation engine error for run {run_id}: {err_msg}")
+            run.status = "failed"
+            run.agent_narrative = f"Engine error: {err_msg}"
+            db.commit()
+            _write_progress(scenario_id, {
+                "progress": 0,
+                "status": "failed",
+                "stage": "failed",
+                "stage_label": f"Engine error: {err_msg}",
+                "error": err_msg,
+                "elapsed_s": round(time.time() - t_start, 1),
+                "eta_s": 0.0,
+            })
+            return
 
         # ── Metrics ───────────────────────────────────────────────────────────
+        _write_progress(scenario_id, {
+            "progress": 86,
+            "stage": "metrics",
+            "stage_label": "Calculating KPI metrics & congestion telemetry...",
+            "elapsed_s": round(time.time() - t_start, 1),
+            "eta_s": 4.0,
+        })
         from validation.metrics_calculator import compute_metrics
         metrics = compute_metrics(telemetry)
 
         # ── Issue detection ───────────────────────────────────────────────────
+        _write_progress(scenario_id, {
+            "progress": 89,
+            "stage": "issues",
+            "stage_label": "Detecting congestion, safety & lane utilization issues...",
+            "elapsed_s": round(time.time() - t_start, 1),
+            "eta_s": 3.0,
+        })
         from ai.issue_detection.congestion_detector import detect_congestion
         from ai.issue_detection.intersection_safety_analyzer import detect_unsafe_intersections
         from ai.issue_detection.lane_utilization_analyzer import detect_lane_issues
@@ -91,7 +171,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             detect_lane_issues(telemetry)
         )
 
-        # ── Fast DB Commit: Mark run DONE & stream metrics to user UI ────────
+        # ── Fast DB Commit: Save baseline run telemetry ───────────────────────
         from backend.models.schema import Issue, Proposal
 
         run.status = "done"
@@ -125,17 +205,14 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
 
         db.commit()
 
-        # Update progress JSON file to 100% DONE so frontend polling unlocks UI immediately
-        progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
-        try:
-            with open(progress_file, "w") as pf:
-                json.dump({"progress": 100, "status": "done", "step": duration_s, "total": duration_s}, pf)
-        except Exception:
-            pass
-
-        log.info(f"Simulation telemetry & issues ready for run {run_id}. UI unlocked.")
-
         # ── Proposal generation & AI Agent analysis ───────────────────────────
+        _write_progress(scenario_id, {
+            "progress": 92,
+            "stage": "proposals",
+            "stage_label": "Generating AI signal timing, lane change & diversion proposals...",
+            "elapsed_s": round(time.time() - t_start, 1),
+            "eta_s": 2.5,
+        })
         from ai.proposal_generator.signal_timing_optimizer import generate_signal_proposals
         from ai.proposal_generator.lane_change_recommender import generate_lane_proposals
         from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
@@ -145,6 +222,29 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             generate_lane_proposals(all_issues, telemetry) +
             generate_diversion_proposals(all_issues, telemetry)
         )
+
+        # ── Zoning analysis (runs after main proposals; non-blocking) ─────────
+        try:
+            from ai.issue_detection.zoning_analyzer import detect_zoning_issues
+            from ai.proposal_generator.zoning_proposer import generate_zoning_proposals
+            zoning_issues    = detect_zoning_issues(telemetry, scenario_id=scenario_id)
+            zoning_proposals = generate_zoning_proposals(zoning_issues)
+            all_issues    = all_issues    + zoning_issues
+            all_proposals = all_proposals + zoning_proposals
+            log.info(
+                f"Zoning pipeline: {len(zoning_issues)} issues, "
+                f"{len(zoning_proposals)} proposals generated."
+            )
+        except Exception as ze:
+            log.warning(f"Zoning analysis failed (non-critical): {ze}")
+
+        _write_progress(scenario_id, {
+            "progress": 96,
+            "stage": "ai_agent",
+            "stage_label": "City Inspector AI generating diagnostic narrative...",
+            "elapsed_s": round(time.time() - t_start, 1),
+            "eta_s": 1.0,
+        })
 
         try:
             from ai.city_inspector_agent.llm_agent import CityInspectorAgent
@@ -176,7 +276,24 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
             db.add(proposal)
 
         db.commit()
-        log.info(f"Pipeline complete: run {run_id} — {len(all_issues)} issues, {len(all_proposals)} proposals saved.")
+
+        # Mark 100% DONE with exact duration
+        t_end = time.time()
+        total_time_s = round(t_end - t_start, 1)
+        _write_progress(scenario_id, {
+            "progress": 100,
+            "status": "done",
+            "stage": "complete",
+            "stage_label": "Simulation and AI optimization complete",
+            "step": duration_s,
+            "total_steps": duration_s,
+            "started_at": started_at,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "total_duration_s": total_time_s,
+            "elapsed_s": total_time_s,
+            "eta_s": 0.0,
+        })
+        log.info(f"Pipeline complete: run {run_id} in {total_time_s}s — {len(all_issues)} issues, {len(all_proposals)} proposals saved.")
 
     except Exception as e:
         log.error(f"Pipeline failed for run {run_id}: {e}", exc_info=True)
@@ -184,6 +301,15 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         if run:
             run.status = "failed"
             db.commit()
+        _write_progress(scenario_id, {
+            "progress": 0,
+            "status": "failed",
+            "stage": "failed",
+            "stage_label": f"Simulation failed: {e}",
+            "error": str(e),
+            "elapsed_s": round(time.time() - t_start, 1),
+            "eta_s": 0.0,
+        })
     finally:
         db.close()
 
@@ -448,50 +574,98 @@ def test_custom_config(
                 G_modified.nodes[found_key]["has_dustbin"] = override.has_dustbin
 
     # Run the custom simulation
-    custom_telemetry = run_simulation(
-        scenario_id=scenario_id,
-        engine=baseline_run.engine,
-        duration_s=baseline_run.duration_s,
-        seed=baseline_run.seed,
-        apply_proposals=apply_proposals,
-        G=G_modified
-    )
-
-    # Compute custom metrics
-    from validation.metrics_calculator import compute_metrics
-    custom_metrics = compute_metrics(custom_telemetry)
-
-    baseline_metrics = {
-        "avg_travel_time_s": baseline_run.avg_travel_time_s,
-        "avg_wait_time_s":   baseline_run.avg_wait_time_s,
-        "avg_speed_kph":     baseline_run.avg_speed_kph,
-        "congestion_ratio":  baseline_run.congestion_ratio,
-        "total_delay_s":     baseline_run.total_delay_s,
-        "emissions_proxy":   baseline_run.emissions_proxy,
-        "efficiency_score":  baseline_run.efficiency_score,
-        "noise_pollution_db": getattr(baseline_run, "noise_pollution_db", 0.0) or 0.0,
-    }
-
-    # Generate comparative deltas
-    deltas = {}
-    for k, val in custom_metrics.items():
-        if k in baseline_metrics and val is not None and baseline_metrics[k] is not None:
-            base_val = baseline_metrics[k]
-            diff_val = val - base_val
-            pct_val = (diff_val / max(base_val, 1) * 100) if base_val != 0 else 0
-            deltas[k] = {
-                "before": round(base_val, 2),
-                "after":  round(val, 2),
-                "diff":   round(diff_val, 2),
-                "pct":    round(pct_val, 1)
-            }
-
-    return {
+    import time
+    t_custom_start = time.time()
+    started_at = datetime.now(timezone.utc).isoformat()
+    _write_progress(scenario_id, {
         "scenario_id": scenario_id,
-        "metrics":     custom_metrics,
-        "deltas":      deltas,
-        "telemetry":   custom_telemetry
-    }
+        "status": "running",
+        "progress": 2,
+        "stage": "initializing",
+        "stage_label": "Preparing sandbox network & signal overrides...",
+        "started_at": started_at,
+        "started_timestamp": t_custom_start,
+        "step": 0,
+        "total_steps": baseline_run.duration_s,
+        "elapsed_s": 0.0,
+        "eta_s": None,
+    })
+
+    try:
+        custom_telemetry = run_simulation(
+            scenario_id=scenario_id,
+            engine=baseline_run.engine,
+            duration_s=baseline_run.duration_s,
+            seed=baseline_run.seed,
+            apply_proposals=apply_proposals,
+            G=G_modified
+        )
+
+        # Compute custom metrics
+        _write_progress(scenario_id, {
+            "progress": 90,
+            "stage": "metrics",
+            "stage_label": "Calculating sandbox KPI deltas & comparison...",
+            "elapsed_s": round(time.time() - t_custom_start, 1),
+            "eta_s": 1.0,
+        })
+        from validation.metrics_calculator import compute_metrics
+        custom_metrics = compute_metrics(custom_telemetry)
+
+        baseline_metrics = {
+            "avg_travel_time_s": baseline_run.avg_travel_time_s,
+            "avg_wait_time_s":   baseline_run.avg_wait_time_s,
+            "avg_speed_kph":     baseline_run.avg_speed_kph,
+            "congestion_ratio":  baseline_run.congestion_ratio,
+            "total_delay_s":     baseline_run.total_delay_s,
+            "emissions_proxy":   baseline_run.emissions_proxy,
+            "efficiency_score":  baseline_run.efficiency_score,
+            "noise_pollution_db": getattr(baseline_run, "noise_pollution_db", 0.0) or 0.0,
+        }
+
+        # Generate comparative deltas
+        deltas = {}
+        for k, val in custom_metrics.items():
+            if k in baseline_metrics and val is not None and baseline_metrics[k] is not None:
+                base_val = baseline_metrics[k]
+                diff_val = val - base_val
+                pct_val = (diff_val / max(base_val, 1) * 100) if base_val != 0 else 0
+                deltas[k] = {
+                    "before": round(base_val, 2),
+                    "after":  round(val, 2),
+                    "diff":   round(diff_val, 2),
+                    "pct":    round(pct_val, 1)
+                }
+
+        t_custom_end = time.time()
+        total_time_s = round(t_custom_end - t_custom_start, 1)
+        _write_progress(scenario_id, {
+            "progress": 100,
+            "status": "done",
+            "stage": "complete",
+            "stage_label": "Sandbox test complete",
+            "total_duration_s": total_time_s,
+            "elapsed_s": total_time_s,
+            "eta_s": 0.0,
+        })
+
+        return {
+            "scenario_id": scenario_id,
+            "metrics":     custom_metrics,
+            "deltas":      deltas,
+            "telemetry":   custom_telemetry
+        }
+    except Exception as e:
+        _write_progress(scenario_id, {
+            "progress": 0,
+            "status": "failed",
+            "stage": "failed",
+            "stage_label": f"Sandbox test failed: {e}",
+            "error": str(e),
+            "elapsed_s": round(time.time() - t_custom_start, 1),
+            "eta_s": 0.0,
+        })
+        raise
 
 
 @router.get("/{scenario_id}/nodes/{node_id}/optimize")
@@ -709,13 +883,17 @@ def get_scenario_progress(scenario_id: int) -> dict:
     """Check live simulation run progress for this scenario."""
     from pathlib import Path
     import json
+    import time
     ROOT = Path(__file__).resolve().parent.parent.parent
     progress_file = ROOT / "data" / f"progress_{scenario_id}.json"
     
     if progress_file.exists():
         try:
             with open(progress_file, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if data.get("status") == "running" and data.get("started_timestamp"):
+                    data["elapsed_s"] = round(time.time() - float(data["started_timestamp"]), 1)
+                return data
         except Exception:
             pass
     return {"progress": 0, "status": "idle"}
@@ -724,6 +902,128 @@ def get_scenario_progress(scenario_id: int) -> dict:
 # ── Phase 15 APIs ─────────────────────────────────────────────────────────────
 
 scenario_router = APIRouter(prefix="/scenario", tags=["Scenario (Phase 15)"])
+
+
+@scenario_router.post("")
+def create_scenario_alt(body: ScenarioCreate, db: Session = Depends(get_db)) -> dict:
+    """Create a new simulation scenario from a map area (Phase 15)."""
+    return create_scenario(body=body, db=db)
+
+
+@scenario_router.post("/{scenario_id}/run")
+def run_simulation_alt(
+    scenario_id: int,
+    body: SimulateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Run baseline simulation for a scenario (Phase 15)."""
+    return simulate(scenario_id=scenario_id, body=body, background_tasks=background_tasks, db=db)
+
+
+@scenario_router.post("/{scenario_id}/modify")
+def modify_scenario_alt(
+    scenario_id: int,
+    body: CustomConfigValidationRequest,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Apply signal/lane custom modifications to a scenario (Phase 15)."""
+    return test_custom_config(scenario_id=scenario_id, body=body, db=db)
+
+
+@scenario_router.get("/{scenario_id}/recommendations")
+def get_recommendations_alt(
+    scenario_id: int,
+    proposal_type: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Retrieve AI-generated optimization recommendations/proposals (Phase 15)."""
+    from backend.api.routes_ai import get_proposals
+    return get_proposals(scenario_id=scenario_id, proposal_type=proposal_type, limit=limit, db=db)
+
+
+# ── Municipal Planning: Signal Capacity & N-Vehicle What-If Analyzer ──────────
+
+class CapacityAnalysisRequest(BaseModel):
+    flow: float = Field(default=500, ge=0, le=5000, description="Arriving vehicle flow (veh/h)")
+    green_s: int = Field(default=35, ge=5, le=120, description="Green phase duration (s)")
+    amber_s: int = Field(default=3, ge=2, le=10, description="Amber/clearance phase (s)")
+    red_s: int   = Field(default=35, ge=5, le=120, description="Red phase duration (s)")
+    lanes: int   = Field(default=1, ge=1, le=6, description="Number of approach lanes")
+    phf: float   = Field(default=0.92, ge=0.7, le=1.0, description="Peak Hour Factor (IRC default 0.92)")
+
+
+@router.post("/{scenario_id}/nodes/{node_id}/capacity-analysis")
+def analyze_signal_capacity(
+    scenario_id: int,
+    node_id: int,
+    body: CapacityAnalysisRequest,
+    db: Session = Depends(get_db)
+) -> dict:
+    """
+    Signal Capacity & N-Vehicle What-If Outcome Analyzer.
+
+    Computes IRC:106-2010 / HCM-based real-world signal capacity, saturation,
+    Webster's control delay, queue backlog (vehicles & meters), Level of Service
+    (LOS Grade A-F), and actionable municipal engineering recommendations.
+    """
+    try:
+        from ai.proposal_generator.capacity_analyzer import analyze_capacity
+        result = analyze_capacity(
+            flow=body.flow,
+            green_s=body.green_s,
+            amber_s=body.amber_s,
+            red_s=body.red_s,
+            lanes=body.lanes,
+            phf=body.phf,
+        )
+        return {"scenario_id": scenario_id, "node_id": node_id, "analysis": result}
+    except Exception as e:
+        log.error(f"Capacity analysis failed for node {node_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Municipal Planning: Road Service / Maintenance Detour Route Planner ───────
+
+class ServiceDetourRequest(BaseModel):
+    closure_type: str  = Field(default="full", description="full | partial | junction")
+    duration_days: int = Field(default=7, ge=1, le=365, description="Estimated closure duration in days")
+    source_node: int | None = Field(default=None, description="Override source node for routing")
+    target_node: int | None = Field(default=None, description="Override target node for routing")
+
+
+@router.post("/{scenario_id}/nodes/{node_id}/service-detour")
+def plan_road_service_detour(
+    scenario_id: int,
+    node_id: int,
+    body: ServiceDetourRequest,
+    db: Session = Depends(get_db)
+) -> dict:
+    """
+    Road Maintenance & Service Closure — Citizen Detour Route Planner.
+
+    When a junction or road segment is closed for maintenance:
+      - Computes top-2 alternative citizen detour routes via the OSM road graph.
+      - Returns GeoJSON coordinates for interactive map rendering.
+      - Quantifies citizen delay impact (extra minutes, extra km).
+      - Identifies spillover traffic on secondary residential streets.
+      - Generates an official Municipal Management & Traffic Police Action Plan.
+    """
+    try:
+        from ai.proposal_generator.service_detour_planner import plan_service_detour
+        result = plan_service_detour(
+            node_id=node_id,
+            closure_type=body.closure_type,
+            duration_days=body.duration_days,
+            source_node=body.source_node,
+            target_node=body.target_node,
+        )
+        return {"scenario_id": scenario_id, "node_id": node_id, "detour": result}
+    except Exception as e:
+        log.error(f"Service detour planning failed for node {node_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @scenario_router.post("")

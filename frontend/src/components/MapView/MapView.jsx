@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { formatElapsed, formatETA } from '../../utils/timeFormat.js'
 import './MapView.css'
 
 const DAVANAGERE_CENTER = { lat: 14.4644, lon: 75.9218, zoom: 13 }
@@ -16,12 +17,15 @@ export default function MapView({
   isReady,
   selectedNode,
   onSelectNode,
+  scenario = null,
   editMode,
   customTelemetry,
   leftSidebarOpen = true,
   rightSidebarOpen = true,
   signalOverrides = {},
-  simRunning = false
+  simRunning = false,
+  simProgress = null,
+  elapsedSeconds = 0
 }) {
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
@@ -358,6 +362,28 @@ export default function MapView({
         // Ensure signal layers stay rendered on top of network and nodes
         if (map.getLayer('signals-halo-layer')) map.moveLayer('signals-halo-layer')
         if (map.getLayer('signals-layer')) map.moveLayer('signals-layer')
+
+        // ── Auto-center & fit camera to current scenario's coordinates ────────
+        if (nodesCopy && nodesCopy.features && nodesCopy.features.length > 0) {
+          let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity
+          for (const f of nodesCopy.features) {
+            const coords = f.geometry?.coordinates
+            if (coords && coords.length >= 2) {
+              const lon = coords[0]
+              const lat = coords[1]
+              if (lon < minLon) minLon = lon
+              if (lon > maxLon) maxLon = lon
+              if (lat < minLat) minLat = lat
+              if (lat > maxLat) maxLat = lat
+            }
+          }
+          if (minLon !== Infinity && maxLon !== -Infinity && (maxLon - minLon > 0.0005 || maxLat - minLat > 0.0005)) {
+            map.fitBounds(
+              [[minLon, minLat], [maxLon, maxLat]],
+              { padding: 60, maxZoom: 15.5, duration: 1000 }
+            )
+          }
+        }
 
         // ── Click handlers ───────────────────────────────────────────────────
         map.off('click', 'signals-layer', map._signalClickHandler)
@@ -1021,7 +1047,7 @@ export default function MapView({
       {/* Overlay info */}
       {isReady && (
         <div className={`map-overlay-tl ${leftSidebarOpen ? 'sidebar-open' : ''}`}>
-          <div className="map-chip">🗺 Davanagere Road Network</div>
+          <div className="map-chip">🗺 {scenario?.city || scenario?.name || 'Road Network'}</div>
           {selectedIssue && (
             <div className="map-chip map-chip-issue">
               📍 {selectedIssue.type?.replace(/_/g, ' ')} — {selectedIssue.severity}
@@ -1146,13 +1172,24 @@ export default function MapView({
           <div className="radar-scanner">
             <div className="radar-sweep" />
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', pointerEvents: 'none' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13, color: '#10b981' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', pointerEvents: 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: '#10b981' }}>
               <span className="live-dot" />
-              SUMO ENGINE SIMULATING
+              <span>SUMO ENGINE SIMULATING</span>
+              <span className="radar-timer-badge">
+                ⏱️ {formatElapsed(elapsedSeconds)}
+              </span>
+              <span className="radar-eta-badge">
+                ⏳ {formatETA(simProgress?.eta_s)}
+              </span>
             </div>
-            <div style={{ fontSize: 11, color: '#94a3b8' }}>
-              Executing TraCI loops & vehicle flow simulations...
+            <div style={{ fontSize: 11, color: '#94a3b8', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>{simProgress?.stage_label || 'Executing TraCI loops & vehicle flow simulations...'}</span>
+              {simProgress?.step > 0 && (
+                <span style={{ color: '#cbd5e1', fontFamily: 'var(--font-mono, monospace)' }}>
+                  ({simProgress.step}/{simProgress.total_steps || 300} • {simProgress.progress ? Math.round(simProgress.progress) : 0}%)
+                </span>
+              )}
             </div>
           </div>
         </div>

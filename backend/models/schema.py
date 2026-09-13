@@ -105,6 +105,9 @@ class SimulationRun(Base):
         self.telemetry_json = json.dumps(t)
 
     def to_dict(self) -> dict:
+        total_duration_s = None
+        if self.finished_at and self.created_at:
+            total_duration_s = round((self.finished_at - self.created_at).total_seconds(), 1)
         return {
             "id": self.id, "scenario_id": self.scenario_id,
             "engine": self.engine, "duration_s": self.duration_s,
@@ -112,6 +115,7 @@ class SimulationRun(Base):
             "is_baseline": self.is_baseline,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "total_duration_s": total_duration_s,
             "agent_narrative": self.agent_narrative,
             "metrics": {
                 "avg_travel_time_s": self.avg_travel_time_s,

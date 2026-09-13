@@ -72,7 +72,8 @@ def _configure_osmnx() -> None:
     ox.settings.log_console = False
     ox.settings.use_cache = True
     ox.settings.cache_folder = str(CACHE_DIR)
-    ox.settings.timeout = 180
+    ox.settings.timeout = 90
+    ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api/interpreter"
     ox.settings.memory = None  # use default memory
 
 
@@ -89,14 +90,49 @@ def download_by_place(place_name: str) -> nx.MultiDiGraph:
         log.info(f"Metropolitan query redirected to sub-district: {place_name!r} to avoid timeouts")
 
     log.info(f"Downloading road network for: {place_name!r}")
-    G = ox.graph_from_place(
-        place_name,
-        network_type="drive",
-        simplify=True,
-        retain_all=False,
-    )
-    log.info(f"Downloaded graph — nodes: {G.number_of_nodes():,}, edges: {G.number_of_edges():,}")
-    return G
+
+    # 1. Resolve exact coordinates via Google Maps Geocoding
+    try:
+        from backend.services import google_maps_service
+        geo = google_maps_service.geocode_place(place_name)
+        if geo.get("is_live_data") and geo.get("center"):
+            lat = geo["center"]["lat"]
+            lon = geo["center"]["lon"]
+            log.info(f"Downloading road network via Google Maps Geocoded point: ({lat}, {lon}) with dist=1800m")
+            G = ox.graph_from_point(
+                (lat, lon),
+                dist=1800,
+                network_type="drive",
+                simplify=True,
+                retain_all=False
+            )
+            log.info(f"Downloaded graph — nodes: {G.number_of_nodes():,}, edges: {G.number_of_edges():,}")
+            return G
+    except Exception as geo_err:
+        log.warning(f"Google Maps geocoded point download failed: {geo_err}. Trying standard place query...")
+
+    # 2. Try standard graph_from_place
+    try:
+        G = ox.graph_from_place(
+            place_name,
+            network_type="drive",
+            simplify=True,
+            retain_all=False,
+        )
+        log.info(f"Downloaded graph — nodes: {G.number_of_nodes():,}, edges: {G.number_of_edges():,}")
+        return G
+    except Exception as err:
+        log.warning(f"ox.graph_from_place({place_name!r}) failed: {err}. Trying OSMnx geocode point...")
+
+    # 3. Final attempt: try OSMnx geocode to point
+    try:
+        point = ox.geocode(place_name)
+        log.info(f"Downloading road network via OSMnx geocoded point: {point} with dist=1800m")
+        G = ox.graph_from_point(point, dist=1800, network_type="drive", simplify=True, retain_all=False)
+        log.info(f"Downloaded graph — nodes: {G.number_of_nodes():,}, edges: {G.number_of_edges():,}")
+        return G
+    except Exception as final_err:
+        raise RuntimeError(f"Could not build road network for '{place_name}': {final_err}")
 
 
 def download_by_bbox(
@@ -104,12 +140,28 @@ def download_by_bbox(
 ) -> nx.MultiDiGraph:
     """Download the drivable road network within a bounding box."""
     log.info(f"Downloading road network for bbox N{north} S{south} E{east} W{west}")
-    G = ox.graph_from_bbox(
-        north, south, east, west,
-        network_type="drive",
-        simplify=True,
-        retain_all=False,
-    )
+    try:
+        G = ox.graph_from_bbox(
+            bbox=(north, south, east, west),
+            network_type="drive",
+            simplify=True,
+            retain_all=False,
+        )
+    except TypeError:
+        try:
+            G = ox.graph_from_bbox(
+                north=north, south=south, east=east, west=west,
+                network_type="drive",
+                simplify=True,
+                retain_all=False,
+            )
+        except TypeError:
+            G = ox.graph_from_bbox(
+                north, south, east, west,
+                network_type="drive",
+                simplify=True,
+                retain_all=False,
+            )
     log.info(f"Downloaded graph — nodes: {G.number_of_nodes():,}, edges: {G.number_of_edges():,}")
     return G
 

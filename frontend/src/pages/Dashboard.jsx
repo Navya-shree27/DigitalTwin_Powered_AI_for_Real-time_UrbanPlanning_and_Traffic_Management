@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import MapView from '../components/MapView/MapView.jsx'
 import MetricsPanel from '../components/MetricsPanel/MetricsPanel.jsx'
 import IssueList from '../components/IssueList/IssueList.jsx'
 import BeforeAfterToggle from '../components/BeforeAfterToggle/BeforeAfterToggle.jsx'
 import ScenarioDropdown from '../components/ScenarioDropdown/ScenarioDropdown.jsx'
-import { scenariosApi, dashboardApi, proposalsApi } from '../services/apiClient.js'
+import { scenariosApi, dashboardApi, proposalsApi, statusApi, googleMapsApi } from '../services/apiClient.js'
+import { formatElapsed, formatETA, formatDuration } from '../utils/timeFormat.js'
 import './Dashboard.css'
 
 const POLL_INTERVAL = 4000   // ms — poll while simulation is running
@@ -31,6 +32,19 @@ export default function Dashboard() {
   const [customSimResult, setCustomSimResult] = useState(null)
   const [customSimLoading, setCustomSimLoading] = useState(false)
   const [simProgress, setSimProgress]     = useState(null)
+
+  // Live Timer State
+  const [simStartTime, setSimStartTime]           = useState(null)
+  const [elapsedSeconds, setElapsedSeconds]       = useState(0)
+  const [lastCompletedDuration, setLastCompletedDuration] = useState(null)
+  const [justCompleted, setJustCompleted]         = useState(false)
+
+  // System status (SUMO / LLM availability)
+  const [systemStatus, setSystemStatus]   = useState(null)
+
+  useEffect(() => {
+    statusApi.get().then(s => setSystemStatus(s)).catch(() => {})
+  }, [])
 
   // ── Load scenarios list ───────────────────────────────────────────────────
   const loadScenarios = useCallback(async () => {
@@ -90,14 +104,41 @@ export default function Dashboard() {
     if (activeScenarioId) loadDashboard(activeScenarioId)
   }, [activeScenarioId])
 
-  // ── Poll while simulation is running ─────────────────────────────────────
+  // ── Poll dashboard while simulation is running ──────────────────────────
   useEffect(() => {
     if (!simRunning || !activeScenarioId) return
     const timer = setInterval(() => loadDashboard(activeScenarioId), POLL_INTERVAL)
     return () => clearInterval(timer)
-  }, [simRunning, activeScenarioId])
+  }, [simRunning, activeScenarioId, loadDashboard])
 
-  // ── Poll progress while simulation is running ────────────────────────────
+  // ── Live Simulation Stopwatch Timer (250ms ticking) ──────────────────────
+  useEffect(() => {
+    const isRunning = simRunning || customSimLoading
+    if (!isRunning) {
+      return
+    }
+
+    const startTs = simProgress?.started_timestamp
+      ? simProgress.started_timestamp * 1000
+      : (simStartTime || Date.now())
+
+    if (!simStartTime) {
+      setSimStartTime(startTs)
+    }
+
+    const timer = setInterval(() => {
+      const currentStart = simProgress?.started_timestamp
+        ? simProgress.started_timestamp * 1000
+        : startTs
+      const now = Date.now()
+      const diff = Math.max(0, (now - currentStart) / 1000)
+      setElapsedSeconds(diff)
+    }, 250)
+
+    return () => clearInterval(timer)
+  }, [simRunning, customSimLoading, simProgress?.started_timestamp, simStartTime])
+
+  // ── Poll progress while simulation is running (800ms) ────────────────────
   useEffect(() => {
     if ((!simRunning && !customSimLoading) || !activeScenarioId) {
       setSimProgress(null)
@@ -108,8 +149,16 @@ export default function Dashboard() {
     const pollProgress = async () => {
       try {
         const data = await scenariosApi.getProgress(activeScenarioId)
-        if (active) {
+        if (active && data) {
           setSimProgress(data)
+          if (data.status === 'done') {
+            if (data.total_duration_s) {
+              setLastCompletedDuration(data.total_duration_s)
+            }
+            setJustCompleted(true)
+            setTimeout(() => setJustCompleted(false), 10000)
+            loadDashboard(activeScenarioId)
+          }
         }
       } catch (e) {
         console.warn('Failed to fetch simulation progress:', e)
@@ -117,12 +166,12 @@ export default function Dashboard() {
     }
 
     pollProgress()
-    const timer = setInterval(pollProgress, 1500)
+    const timer = setInterval(pollProgress, 800)
     return () => {
       active = false
       clearInterval(timer)
     }
-  }, [simRunning, customSimLoading, activeScenarioId])
+  }, [simRunning, customSimLoading, activeScenarioId, loadDashboard])
 
   // ── Create scenario ───────────────────────────────────────────────────────
   const handleCreateScenario = async (payload) => {
@@ -150,6 +199,10 @@ export default function Dashboard() {
   const handleRunSimulation = async () => {
     if (!activeScenarioId) return
     setError(null)
+    const now = Date.now()
+    setSimStartTime(now)
+    setElapsedSeconds(0)
+    setJustCompleted(false)
     try {
       await scenariosApi.simulate(activeScenarioId)
       setSimRunning(true)
@@ -160,6 +213,7 @@ export default function Dashboard() {
       }))
     } catch (e) {
       setError(e.message)
+      setSimRunning(false)
     }
   }
 
@@ -168,6 +222,9 @@ export default function Dashboard() {
     if (!activeScenarioId) return
     setCustomSimLoading(true)
     setError(null)
+    const now = Date.now()
+    setSimStartTime(now)
+    setElapsedSeconds(0)
     try {
       const overridesList = Object.entries(signalOverrides).map(([id, val]) => ({
         node_id: Number(id),
@@ -233,12 +290,38 @@ export default function Dashboard() {
         </div>
 
         <div className="header-right">
-          {simRunning && (
-            <div className="sim-status">
-              <div className="spinner" />
-              <span>Simulation running…</span>
+          {/* SUMO / Engine status chip */}
+          {systemStatus && (
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '4px 10px', borderRadius: 20,
+                fontSize: 11, fontWeight: 600,
+                background: systemStatus.sumo?.available
+                  ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)',
+                border: `1px solid ${systemStatus.sumo?.available
+                  ? 'rgba(34,197,94,0.4)' : 'rgba(251,191,36,0.4)'}`,
+                color: systemStatus.sumo?.available ? '#86efac' : '#fde68a',
+              }}
+              title={systemStatus.sumo?.available
+                ? `SUMO v${systemStatus.sumo.version} — Live simulation available`
+                : 'SUMO not installed — using synthetic simulation (set SUMO_HOME in .env)'}
+            >
+              <span style={{ fontSize: 8 }}>●</span>
+              {systemStatus.sumo?.available
+                ? `SUMO v${systemStatus.sumo.version}`
+                : 'Synthetic Mode'}
             </div>
           )}
+          {simRunning && (
+            <div className="sim-status sim-status-timer">
+              <div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} />
+              <span className="header-timer-text">
+                ⏱️ {formatElapsed(elapsedSeconds)} • ETA {formatETA(simProgress?.eta_s)} ({simProgress?.progress ? Math.round(simProgress.progress) : 0}%)
+              </span>
+            </div>
+          )}
+
           {activeScenarioId && (
             <div className="flex gap-2" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
@@ -340,6 +423,17 @@ export default function Dashboard() {
                 </span>
               )}
             </div>
+
+            {/* Run completion duration banner */}
+            {(justCompleted || dashboardData?.run?.total_duration_s || lastCompletedDuration) && !simRunning && (
+              <div className="sim-completed-pill">
+                <span className="completed-icon">⚡</span>
+                <span>
+                  Last run completed in <strong>{formatDuration(dashboardData?.run?.total_duration_s || lastCompletedDuration)}</strong>
+                </span>
+              </div>
+            )}
+
             <MetricsPanel
               metrics={metrics}
               isLoading={loading && !metrics}
@@ -397,28 +491,73 @@ export default function Dashboard() {
           )}
 
           {simRunning && (
-            <div className="sim-progress-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <div className="spinner" style={{ width: 20, height: 20, borderWidth: 3 }} />
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>Simulation in progress</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
-                    Running SUMO traffic model & extracting metrics…
+            <div className="sim-progress-card full-timer-card">
+              <div className="sim-progress-header">
+                <div className="sim-progress-title-row">
+                  <div className="sim-spinner-container">
+                    <div className="spinner" style={{ width: 18, height: 18, borderWidth: 2.5 }} />
+                  </div>
+                  <div>
+                    <div className="sim-title">Simulation in Progress</div>
+                    <div className="sim-stage-desc">
+                      {simProgress?.stage_label || 'Executing TraCI loops & vehicle flow simulations…'}
+                    </div>
                   </div>
                 </div>
               </div>
-              
-              {simProgress && simProgress.progress > 0 && (
-                <div style={{ width: '100%', marginTop: 4 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
-                    <span>Progress</span>
-                    <span>{simProgress.progress}%</span>
-                  </div>
-                  <div style={{ width: '100%', height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ width: `${simProgress.progress}%`, height: '100%', background: 'linear-gradient(90deg, #10b981, #3b82f6)', transition: 'width 0.3s ease' }} />
-                  </div>
+
+              {/* High-Precision Timer & Dynamic ETA Display */}
+              <div className="sim-timer-grid">
+                <div className="sim-timer-box elapsed">
+                  <span className="sim-timer-label">⏱️ Elapsed Time</span>
+                  <span className="sim-timer-value digital-clock">
+                    {formatElapsed(elapsedSeconds)}
+                  </span>
+                </div>
+                <div className="sim-timer-box eta">
+                  <span className="sim-timer-label">⏳ Estimated Remaining</span>
+                  <span className="sim-timer-value eta-highlight">
+                    {formatETA(simProgress?.eta_s)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Real-Time Stepping & Flow Metrics */}
+              {simProgress && simProgress.total_steps > 0 && (
+                <div className="sim-stats-bar">
+                  <span className="sim-stat-item">
+                    <strong>Step:</strong> {simProgress.step || 0} / {simProgress.total_steps}
+                  </span>
+                  {simProgress.steps_per_s > 0 && (
+                    <span className="sim-stat-item">
+                      <strong>Speed:</strong> {simProgress.steps_per_s} stp/s
+                    </span>
+                  )}
+                  {simProgress.active_vehicles != null && (
+                    <span className="sim-stat-item">
+                      <strong>Vehicles:</strong> {simProgress.active_vehicles}
+                    </span>
+                  )}
                 </div>
               )}
+
+              {/* Accurate Multi-Stage Progress Bar */}
+              <div className="sim-bar-wrapper">
+                <div className="sim-bar-labels">
+                  <span>Progress</span>
+                  <span className="sim-bar-pct">
+                    {simProgress?.progress ? `${Math.round(simProgress.progress)}%` : '0%'}
+                  </span>
+                </div>
+                <div className="sim-bar-track">
+                  <div
+                    className="sim-bar-fill"
+                    style={{
+                      width: `${Math.min(100, Math.max(simProgress?.progress || 2, 2))}%`,
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           )}
         </aside>
@@ -427,16 +566,25 @@ export default function Dashboard() {
         <main className="map-area">
           <MapView
             scenarioId={activeScenarioId}
+            scenario={scenario}
             selectedIssue={selectedIssue}
             isReady={isReady}
             selectedNode={selectedNode}
-            onSelectNode={setSelectedNode}
+            onSelectNode={(node) => {
+              setSelectedNode(node)
+              if (node) {
+                setEditMode(true)
+                setRightSidebarOpen(true)
+              }
+            }}
             editMode={editMode}
             customTelemetry={customSimResult?.telemetry}
             leftSidebarOpen={leftSidebarOpen}
             rightSidebarOpen={rightSidebarOpen}
             signalOverrides={signalOverrides}
             simRunning={simRunning || customSimLoading}
+            simProgress={simProgress}
+            elapsedSeconds={elapsedSeconds}
           />
 
           {/* Before/after overlay — always visible when sim is ready and not in sandbox mode */}
@@ -543,6 +691,10 @@ export default function Dashboard() {
                 customSimLoading={customSimLoading}
                 customSimResult={customSimResult}
                 scenarioId={activeScenarioId}
+                onDetourData={(detour) => {
+                  // Future: render detour GeoJSON overlays on MapView
+                  console.log('[Detour Plan] Routes computed:', detour?.detour_routes?.length)
+                }}
                 onClose={() => {
                   setEditMode(false)
                   setSelectedNode(null)
@@ -665,6 +817,33 @@ function NewScenarioModal({ onClose, onCreate, loading }) {
   const [city, setCity]     = useState('Davanagere, Karnataka, India')
   const [desc, setDesc]     = useState('')
   const [force, setForce]   = useState(false)
+  const [geoSearching, setGeoSearching] = useState(false)
+  const [geoResult, setGeoResult] = useState(null)
+  const [geoError, setGeoError] = useState(null)
+
+  const handleGeocodeSearch = async () => {
+    if (!city) return
+    setGeoSearching(true)
+    setGeoError(null)
+    setGeoResult(null)
+    try {
+      const res = await googleMapsApi.geocode(city)
+      if (res.is_live_data && res.formatted_address) {
+        setCity(res.formatted_address)
+        setGeoResult(res)
+        if (!name || name === 'Davanagere Peak Hour') {
+          const shortName = res.formatted_address.split(',')[0]
+          setName(`${shortName} Traffic Simulation`)
+        }
+      } else {
+        setGeoError(res.error_message || res.message || 'Could not find location')
+      }
+    } catch (e) {
+      setGeoError(e.message || 'Failed to connect to geocoding service')
+    } finally {
+      setGeoSearching(false)
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -687,15 +866,64 @@ function NewScenarioModal({ onClose, onCreate, loading }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">City / Place Name</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <label className="form-label" style={{ margin: 0 }}>City / Place Name</label>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={handleGeocodeSearch}
+                disabled={geoSearching || !city}
+                style={{
+                  padding: '3px 10px', fontSize: 11,
+                  background: 'rgba(56,189,248,0.15)',
+                  border: '1px solid rgba(56,189,248,0.3)',
+                  color: '#38bdf8',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                {geoSearching ? (
+                  <><div className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /> Geocoding…</>
+                ) : (
+                  '🔍 Google Geocode'
+                )}
+              </button>
+            </div>
             <input
               className="form-input"
               value={city}
-              onChange={e => setCity(e.target.value)}
+              onChange={e => { setCity(e.target.value); setGeoResult(null); setGeoError(null); }}
               placeholder="e.g. Davanagere, Karnataka, India"
               id="input-scenario-city"
             />
-            <small className="form-hint">Used by OpenStreetMap to download the road network.</small>
+            <small className="form-hint">Type any city, area, or landmark and click "Google Geocode".</small>
+
+            {geoResult?.is_live_data && (
+              <div style={{
+                marginTop: 8, padding: '8px 12px', borderRadius: 8,
+                background: 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(6,182,212,0.08))',
+                border: '1px solid rgba(16,185,129,0.35)',
+                fontSize: 11.5, color: '#e2e8f0'
+              }}>
+                <div style={{ fontWeight: 700, color: '#34d399', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>✓ Location Geocoded ({geoResult.provider || 'Google Maps'})</span>
+                </div>
+                <div style={{ color: '#f8fafc', fontSize: 12, fontWeight: 600 }}>{geoResult.formatted_address}</div>
+                <div style={{ marginTop: 4, display: 'flex', gap: 10, fontSize: 10.5, color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+                  <span>Lat: <strong>{geoResult.center?.lat?.toFixed(4)}</strong></span>
+                  <span>Lon: <strong>{geoResult.center?.lon?.toFixed(4)}</strong></span>
+                </div>
+              </div>
+            )}
+
+            {geoError && (
+              <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', fontSize: 11, color: '#fca5a5' }}>
+                ⚠ {geoError}
+              </div>
+            )}
           </div>
 
           <div className="form-group">
@@ -713,17 +941,44 @@ function NewScenarioModal({ onClose, onCreate, loading }) {
             <input type="checkbox" checked={force} onChange={e => setForce(e.target.checked)} />
             Force re-download OSM data
           </label>
+
+          {/* Informational note for large city downloads */}
+          <div style={{
+            marginTop: 10, padding: '8px 12px', borderRadius: 8,
+            background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+            fontSize: 11, color: '#93c5fd', lineHeight: 1.4
+          }}>
+            ℹ️ <strong>City Download Notice:</strong> Major cities (e.g. Bengaluru, Delhi) contain thousands of road segments and building footprints. Map download and SUMO digital twin compilation typically takes 20–45 seconds.
+          </div>
+
+          {loading && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px', borderRadius: 8,
+              background: 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(59,130,246,0.10))',
+              border: '1px solid rgba(16,185,129,0.3)',
+              fontSize: 12, color: '#f8fafc'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, fontWeight: 700, color: '#34d399' }}>
+                <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                <span>Downloading & Building Road Network…</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.5 }}>
+                📡 Fetching OpenStreetMap road graph &amp; Google geocoordinates…<br />
+                🚦 Computing intersection topology, lane counts &amp; signal phasings…
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={loading}>Cancel</button>
           <button
             className="btn btn-primary"
             onClick={() => onCreate({ name, city, description: desc, forceRebuild: force })}
             disabled={loading || !name || !city}
             id="btn-create-scenario"
           >
-            {loading ? <><div className="spinner" style={{width:14,height:14}} /> Creating…</> : '🚀 Create & Download Map'}
+            {loading ? <><div className="spinner" style={{width:14,height:14}} /> Building Network…</> : '🚀 Create & Download Map'}
           </button>
         </div>
       </div>
@@ -739,7 +994,8 @@ function SignalSandboxPanel({
   customSimLoading,
   customSimResult,
   scenarioId,
-  onClose
+  onClose,
+  onDetourData
 }) {
   const nodeId = selectedNode?.osmid
   const [green, setGreen] = useState(35)
@@ -754,6 +1010,31 @@ function SignalSandboxPanel({
   const [aiRedesignLoading, setAiRedesignLoading] = useState(false)
   const [aiRedesignResult, setAiRedesignResult] = useState(null)
   const [aiRedesignError, setAiRedesignError] = useState(null)
+
+  // Tab navigation: signal | capacity | detour | google
+  const [sandboxTab, setSandboxTab] = useState('signal')
+
+  // Capacity What-If Analyzer state
+  const [capFlow, setCapFlow] = useState(600)
+  const [capResult, setCapResult] = useState(null)
+  const [capLoading, setCapLoading] = useState(false)
+  const [capError, setCapError] = useState(null)
+
+  // Service Detour Planner state
+  const [detourClosureType, setDetourClosureType] = useState('full')
+  const [detourDays, setDetourDays] = useState(7)
+  const [detourResult, setDetourResult] = useState(null)
+  const [detourLoading, setDetourLoading] = useState(false)
+  const [detourError, setDetourError] = useState(null)
+
+  // Google Maps Platform state
+  const [gmapsStatus, setGmapsStatus] = useState(null)
+  const [gmapsStreetView, setGmapsStreetView] = useState(null)
+  const [gmapsHeading, setGmapsHeading] = useState(0)
+  const [gmapsTraffic, setGmapsTraffic] = useState(null)
+  const [gmapsPois, setGmapsPois] = useState(null)
+  const [gmapsLoading, setGmapsLoading] = useState(false)
+  const [gmapsError, setGmapsError] = useState(null)
 
   // Synchronize slider state when selected node or overrides change
   useEffect(() => {
@@ -948,11 +1229,123 @@ function SignalSandboxPanel({
 
   const totalCycle = green + amber + red
 
+  // ── Capacity What-If Analyzer handler ────────────────────────────────────
+  const handleCapacityAnalysis = async () => {
+    if (!nodeId || !scenarioId) return
+    setCapLoading(true)
+    setCapError(null)
+    try {
+      const result = await scenariosApi.capacityAnalysis(scenarioId, nodeId, {
+        flow: capFlow,
+        green_s: green,
+        amber_s: amber,
+        red_s: red,
+        lanes,
+      })
+      setCapResult(result.analysis)
+    } catch (e) {
+      setCapError(e.message)
+    } finally {
+      setCapLoading(false)
+    }
+  }
+
+  // Auto-update capacity when slider or signal params change
+  useEffect(() => {
+    if (sandboxTab === 'capacity' && nodeId && scenarioId) {
+      handleCapacityAnalysis()
+    }
+  }, [capFlow, green, amber, red, lanes, sandboxTab, nodeId])
+
+  // ── Road Service Detour handler ──────────────────────────────────────────
+  const handleServiceDetour = async () => {
+    if (!nodeId || !scenarioId) return
+    setDetourLoading(true)
+    setDetourError(null)
+    try {
+      const result = await scenariosApi.serviceDetour(scenarioId, nodeId, {
+        closure_type: detourClosureType,
+        duration_days: detourDays,
+      })
+      setDetourResult(result.detour)
+      if (onDetourData) onDetourData(result.detour)
+    } catch (e) {
+      setDetourError(e.message)
+    } finally {
+      setDetourLoading(false)
+    }
+  }
+
+  // ── Google Maps Platform handlers ─────────────────────────────────────
+  const loadGoogleMapsData = async () => {
+    if (!selectedNode || !nodeId) return
+    const lat = selectedNode.lat || selectedNode.y
+    const lon = selectedNode.lon || selectedNode.x
+    if (!lat || !lon) return
+
+    setGmapsLoading(true)
+    setGmapsError(null)
+    try {
+      // 1. Status & Street View
+      const [statusRes, svRes] = await Promise.all([
+        googleMapsApi.getStatus(),
+        googleMapsApi.getStreetView(lat, lon, { heading: gmapsHeading }),
+      ])
+      setGmapsStatus(statusRes)
+      setGmapsStreetView(svRes)
+
+      // 2. Nearby Safety POIs
+      const poisRes = await googleMapsApi.getNearbyPois(lat, lon, 500)
+      setGmapsPois(poisRes)
+
+      // 3. Traffic comparison against adjacent junction
+      const trafficRes = await googleMapsApi.trafficCompare({
+        origin_lat: lat,
+        origin_lon: lon,
+        dest_lat: lat + 0.006,
+        dest_lon: lon + 0.006,
+        simulated_travel_time_s: 140.0,
+      })
+      setGmapsTraffic(trafficRes)
+    } catch (e) {
+      setGmapsError(e.message)
+    } finally {
+      setGmapsLoading(false)
+    }
+  }
+
+  // Load Google Maps data when switching to google tab or rotating heading
+  useEffect(() => {
+    if (sandboxTab === 'google' && nodeId) {
+      loadGoogleMapsData()
+    }
+  }, [sandboxTab, nodeId, gmapsHeading])
+
+  const LOS_COLORS = { A: '#22c55e', B: '#84cc16', C: '#eab308', D: '#f97316', E: '#ef4444', F: '#7f1d1d' }
+
   return (
     <div className="sandbox-panel-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', paddingTop: '18px' }}>
       <div className="sidebar-section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 18px 12px' }}>
-        <span className="sidebar-section-title">🚦 Signal Sandbox</span>
+        <span className="sidebar-section-title">🏛️ Municipal Planner</span>
         <button className="btn btn-ghost" style={{ padding: '2px 6px', fontSize: 12 }} onClick={onClose}>✕ Exit</button>
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="sandbox-tab-bar">
+        {[
+          { key: 'signal',   label: '⚙️ Signal' },
+          { key: 'capacity', label: '📊 Capacity' },
+          { key: 'detour',   label: '🚧 Detour' },
+          { key: 'google',   label: '🗺️ Google' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            className={`sandbox-tab-btn ${sandboxTab === tab.key ? 'active' : ''}`}
+            onClick={() => setSandboxTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="sandbox-content" style={{ display: 'flex', flexDirection: 'column', gap: '14px', overflowY: 'auto', flex: 1, paddingRight: '4px' }}>
@@ -961,12 +1354,12 @@ function SignalSandboxPanel({
             <div style={{ fontSize: 36, marginBottom: 12 }}>🧭</div>
             <div style={{ fontWeight: 600, fontSize: 14 }}>Select an Intersection</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Click any junction on the map to customize its signal configuration.
+              Click any junction on the map to access Signal Config, Capacity Analysis & Road Service Detour tools.
             </div>
           </div>
         ) : (
           <>
-            {/* Node info card */}
+            {/* Node info card — always visible */}
             <div className="glass-card" style={{ padding: '12px 14px', marginTop: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontWeight: 700, fontSize: 14 }}>
@@ -1004,6 +1397,10 @@ function SignalSandboxPanel({
                 </div>
               )}
             </div>
+
+            {/* ── TAB: Signal Config ─────────────────────────────── */}
+            {sandboxTab === 'signal' && (
+            <>
 
             {/* Signal timing controls (only when signal is active) */}
             {isSignal && (
@@ -1186,27 +1583,383 @@ function SignalSandboxPanel({
               </button>
             </div>
           </>
-        )}
+          )}
+
+          {/* ── TAB: Capacity & N-Vehicle What-If Analyzer ─────── */}
+          {sandboxTab === 'capacity' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="glass-card" style={{ padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: '#f1f5f9' }}>
+                  📊 Signal Capacity Analyzer
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+                  Based on IRC:106-2010 &amp; HCM v6 standards. Adjust N-vehicles to see real-world outcomes.
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>🚗 Arriving Flow (veh/h)</label>
+                    <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#38bdf8', fontWeight: 700 }}>{capFlow}</span>
+                  </div>
+                  <input
+                    type="range" min={100} max={3500} step={50} value={capFlow}
+                    onChange={e => setCapFlow(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: '#38bdf8' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#64748b', marginTop: 2 }}>
+                    <span>100 veh/h (light)</span><span>3500 veh/h (heavy)</span>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 10.5, color: '#94a3b8', marginBottom: 10, fontFamily: 'var(--font-mono)', padding: '6px 8px', background: 'rgba(0,0,0,0.25)', borderRadius: 6 }}>
+                  Config: 🟢{green}s / 🟡{amber}s / 🔴{red}s · {lanes} lane{lanes > 1 ? 's' : ''}
+                </div>
+
+                {capLoading && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className="spinner" style={{ width: 14, height: 14 }} />
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Computing IRC/HCM metrics…</span>
+                  </div>
+                )}
+                {capError && <div style={{ color: '#ef4444', fontSize: 11 }}>⚠ {capError}</div>}
+              </div>
+
+              {capResult && !capLoading && (
+                <>
+                  <div className="glass-card" style={{
+                    padding: 14,
+                    background: `linear-gradient(135deg, ${capResult.los.color}18, rgba(0,0,0,0.5))`,
+                    border: `1px solid ${capResult.los.color}50`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Level of Service</div>
+                        <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 2 }}>{capResult.los.description}</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Delay: <strong style={{ color: '#f1f5f9' }}>{capResult.los.delay_s}s/vehicle</strong></div>
+                      </div>
+                      <div style={{ fontSize: 40, fontWeight: 900, color: capResult.los.color, textShadow: `0 0 20px ${capResult.los.color}80`, fontFamily: 'var(--font-mono)', lineHeight: 1 }}>
+                        {capResult.los.grade}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    {[
+                      { label: 'Approach Capacity', value: `${capResult.capacity.approach_capacity_pcu_hr.toLocaleString()} PCU/h`, warn: false },
+                      { label: 'Max Safe Flow', value: `${capResult.capacity.max_safe_flow_veh_hr.toLocaleString()} veh/h`, warn: capFlow > capResult.capacity.max_safe_flow_veh_hr },
+                      { label: 'v/c Saturation', value: (capResult.performance.x_vc * 100).toFixed(1) + '%', warn: capResult.performance.x_vc > 0.85 },
+                      { label: 'Queue Backlog', value: `${capResult.performance.queue_vehicles} veh · ${capResult.performance.queue_length_m}m`, warn: capResult.performance.queue_vehicles > 10 },
+                      { label: 'Throughput', value: `${capResult.performance.throughput_veh_hr.toLocaleString()} veh/h`, warn: false },
+                      { label: 'Blocked/Hour', value: `${capResult.performance.blocked_veh_hr} veh`, warn: capResult.performance.blocked_veh_hr > 0 },
+                    ].map((m, i) => (
+                      <div key={i} style={{ padding: '8px 10px', borderRadius: 8, background: m.warn ? 'rgba(239,68,68,0.10)' : 'rgba(255,255,255,0.03)', border: `1px solid ${m.warn ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.06)'}` }}>
+                        <div style={{ fontSize: 9.5, color: '#94a3b8', marginBottom: 2 }}>{m.label}</div>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: m.warn ? '#ef4444' : '#f1f5f9', fontFamily: 'var(--font-mono)' }}>{m.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {capResult.recommendations?.length > 0 && (
+                    <div className="glass-card" style={{ padding: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>🏛️ Municipal Engineer Recommendations</div>
+                      {capResult.recommendations.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 6, lineHeight: 1.5 }}>{r}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(66,133,244,0.10)', border: '1px solid rgba(66,133,244,0.25)', fontSize: 11, color: '#93c5fd' }}>
+                    💡 <strong>Google Maps:</strong> Use Directions API with <code>traffic_model=pessimistic</code> to cross-validate against real-world travel times on this corridor.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── TAB: Road Service & Citizen Detour Planner ──────── */}
+          {sandboxTab === 'detour' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="glass-card" style={{ padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: '#f1f5f9' }}>🚧 Road Service &amp; Detour Planner</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
+                  Simulate road maintenance closure and compute citizen alternate routes with a municipal action plan.
+                </div>
+
+                <div style={{ marginBottom: 10 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Closure Type</label>
+                  <select
+                    value={detourClosureType}
+                    onChange={e => setDetourClosureType(e.target.value)}
+                    style={{ width: '100%', padding: '6px 10px', borderRadius: 7, background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)', color: '#f1f5f9', fontSize: 12 }}
+                  >
+                    <option value="full">Full Closure (No through traffic)</option>
+                    <option value="partial">Partial Closure (One lane remains)</option>
+                    <option value="junction">Junction Closure</option>
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>📅 Duration (days)</label>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#f59e0b', fontWeight: 700 }}>{detourDays}d</span>
+                  </div>
+                  <input type="range" min={1} max={90} step={1} value={detourDays} onChange={e => setDetourDays(Number(e.target.value))} style={{ width: '100%', accentColor: '#f59e0b' }} />
+                </div>
+
+                <button className="btn btn-primary" onClick={handleServiceDetour} disabled={detourLoading} style={{ width: '100%', justifyContent: 'center', fontSize: 13 }}>
+                  {detourLoading ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Computing detour routes…</> : '🔀 Calculate Citizen Detour Routes'}
+                </button>
+                {detourError && <div style={{ color: '#ef4444', fontSize: 11, marginTop: 6 }}>⚠ {detourError}</div>}
+              </div>
+
+              {detourResult && !detourLoading && (
+                <>
+                  <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 11.5, color: '#fde68a', lineHeight: 1.5 }}>
+                    📣 <strong>Citizen Advisory:</strong> {detourResult.citizen_advisory}
+                  </div>
+
+                  {detourResult.detour_routes?.map((route, i) => (
+                    <div key={route.route_id} className="glass-card" style={{ padding: 12, border: `1px solid ${i === 0 ? 'rgba(6,182,212,0.35)' : 'rgba(245,158,11,0.3)'}`, background: i === 0 ? 'rgba(6,182,212,0.06)' : 'rgba(245,158,11,0.06)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontWeight: 700, fontSize: 12, color: i === 0 ? '#06b6d4' : '#f59e0b' }}>{route.label}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', fontSize: 9.5 }}>+{route.extra_time_min}min</span>
+                          <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc', fontSize: 9.5 }}>+{route.extra_km}km</span>
+                        </div>
+                      </div>
+                      {route.road_steps?.length > 0 && (
+                        <div style={{ fontSize: 10.5, color: '#94a3b8', marginBottom: 6 }}>
+                          <span style={{ fontWeight: 600, color: '#cbd5e1' }}>Via: </span>
+                          {route.road_steps.slice(0, 4).join(' → ')}{route.road_steps.length > 4 && ' …'}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 12, fontSize: 10.5, color: '#94a3b8' }}>
+                        <span>🛣️ {(route.distance_m / 1000).toFixed(1)} km</span>
+                        <span>⏱️ {Math.round(route.travel_time_s / 60)} min</span>
+                        <span>🔀 {route.hops} junctions</span>
+                      </div>
+                      {route.spillover_roads?.length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 10, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', borderRadius: 5, padding: '4px 8px' }}>
+                          ⚠️ Spillover risk: {route.spillover_roads.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {detourResult.municipal_action_plan?.length > 0 && (
+                    <div className="glass-card" style={{ padding: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9', marginBottom: 8 }}>📋 Official Municipal Action Plan</div>
+                      {detourResult.municipal_action_plan.map((step, i) => (
+                        <div key={i} style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 7, paddingBottom: 7, borderBottom: i < detourResult.municipal_action_plan.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', lineHeight: 1.5 }}>{step}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {detourResult.google_maps_closure_link && (
+                    <a href={detourResult.google_maps_closure_link} target="_blank" rel="noopener noreferrer"
+                       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'rgba(66,133,244,0.12)', border: '1px solid rgba(66,133,244,0.3)', color: '#93c5fd', fontSize: 11, textDecoration: 'none', fontWeight: 600 }}>
+                      🗺️ View Closure Location on Google Maps <span style={{ marginLeft: 'auto', opacity: 0.6 }}>↗</span>
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── TAB: Google Maps Platform Intelligence ──────────── */}
+          {sandboxTab === 'google' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Google Cloud API Key status header */}
+              <div className="glass-card" style={{ padding: 12, background: 'linear-gradient(135deg, rgba(66,133,244,0.12), rgba(52,168,83,0.06))', border: '1px solid rgba(66,133,244,0.3)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#93c5fd' }}>
+                    🌐 Google Maps Platform
+                  </span>
+                  <span className={`badge ${gmapsStatus?.is_configured ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: 9.5 }}>
+                    {gmapsStatus?.is_configured ? '✓ Key Active ($200/mo Credit)' : '⚡ Simulation Mode (No Key Set)'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.4 }}>
+                  Free tier includes ~40,000 directions/mo, ~28,500 Street View panoramas, and ~10,000 places POI lookups.
+                </div>
+              </div>
+
+              {gmapsLoading && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12 }}>
+                  <div className="spinner" style={{ width: 14, height: 14 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Querying Google Maps Platform APIs…</span>
+                </div>
+              )}
+
+              {/* 1. Street View 360° Visual Audit Card */}
+              {gmapsStreetView && (
+                <div className="glass-card" style={{ padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9' }}>📷 Street View 360° Visual Audit</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Heading: {gmapsHeading}°</span>
+                  </div>
+
+                  <div style={{ position: 'relative', width: '100%', height: 160, borderRadius: 8, overflow: 'hidden', background: '#0f172a', border: '1px solid rgba(255,255,255,0.1)' }}>
+                    <img
+                      src={gmapsStreetView.image_url}
+                      alt="Junction Street View"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                    <div style={{ display: 'none', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6, color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: 12 }}>
+                      <span>🏙️ Street View Panorama</span>
+                      <small style={{ color: '#64748b' }}>Configure GOOGLE_MAPS_API_KEY in .env to render live imagery.</small>
+                    </div>
+                  </div>
+
+                  {/* 360° Compass rotation buttons */}
+                  <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                    {[
+                      { label: 'North (0°)', deg: 0 },
+                      { label: 'East (90°)', deg: 90 },
+                      { label: 'South (180°)', deg: 180 },
+                      { label: 'West (270°)', deg: 270 },
+                    ].map(h => (
+                      <button
+                        key={h.deg}
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => setGmapsHeading(h.deg)}
+                        style={{
+                          flex: 1, padding: '4px 2px', fontSize: 10,
+                          background: gmapsHeading === h.deg ? 'rgba(56,189,248,0.2)' : 'rgba(255,255,255,0.03)',
+                          borderColor: gmapsHeading === h.deg ? '#38bdf8' : 'rgba(255,255,255,0.06)',
+                          color: gmapsHeading === h.deg ? '#38bdf8' : '#94a3b8',
+                        }}
+                      >
+                        {h.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <a
+                    href={gmapsStreetView.interactive_street_view_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8, padding: '6px 10px', borderRadius: 6, background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa', fontSize: 11, textDecoration: 'none', fontWeight: 600 }}
+                  >
+                    🔄 Open Interactive 360° Street View <span style={{ opacity: 0.6 }}>↗</span>
+                  </a>
+                </div>
+              )}
+
+              {/* 2. Live Real-World Traffic Comparison Card */}
+              {gmapsTraffic && (
+                <div className="glass-card" style={{ padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9' }}>🚦 Live Real-World Traffic Calibration</span>
+                    <span className="badge" style={{ fontSize: 9.5, background: gmapsTraffic.is_live_data ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)', color: gmapsTraffic.is_live_data ? '#86efac' : '#fde68a' }}>
+                      {gmapsTraffic.is_live_data ? 'Live Google Traffic' : 'Calibrated Model'}
+                    </span>
+                  </div>
+
+                  {gmapsTraffic.google_traffic && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+                      <div style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ fontSize: 9.5, color: '#94a3b8' }}>Real Travel Time (Live)</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+                          {gmapsTraffic.google_traffic.duration_in_traffic_min} mins
+                        </div>
+                      </div>
+                      <div style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ fontSize: 9.5, color: '#94a3b8' }}>Simulated Duration</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>
+                          {gmapsTraffic.simulated_vs_real_delta?.simulated_duration_min} mins
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.4 }}>
+                    <strong>Congestion State:</strong> {gmapsTraffic.google_traffic?.congestion_level}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Nearby Safety & Civic POIs Card */}
+              {gmapsPois && (
+                <div className="glass-card" style={{ padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9', marginBottom: 8 }}>
+                    🏫 Nearby Institutional &amp; Safety POIs
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+                    {gmapsPois.pois?.slice(0, 4).map((poi, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#f8fafc' }}>{poi.name}</div>
+                          <div style={{ fontSize: 9.5, color: '#94a3b8' }}>{poi.vicinity || 'Within 500m'}</div>
+                        </div>
+                        <span className="badge" style={{ fontSize: 9, background: poi.type === 'school' ? 'rgba(239,68,68,0.15)' : poi.type === 'hospital' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)', color: poi.type === 'school' ? '#fca5a5' : poi.type === 'hospital' ? '#fde68a' : '#93c5fd' }}>
+                          {poi.type.toUpperCase()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {gmapsPois.zoning_advice?.map((adv, i) => (
+                    <div key={i} style={{ fontSize: 10.5, color: '#cbd5e1', padding: '4px 0', borderTop: '1px solid rgba(255,255,255,0.04)', lineHeight: 1.4 }}>
+                      {adv}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
         {/* Running indicator */}
         {customSimLoading && (
-          <div className="sim-progress-card" style={{ marginTop: 8, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Running SUMO sandbox simulation…</div>
-            </div>
-            
-            {simProgress && simProgress.progress > 0 && (
-              <div style={{ width: '100%' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2, fontFamily: 'var(--font-mono)' }}>
-                  <span>Simulating Steps</span>
-                  <span>{simProgress.progress}%</span>
-                </div>
-                <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ width: `${simProgress.progress}%`, height: '100%', background: '#6366f1', transition: 'width 0.3s ease' }} />
+          <div className="sim-progress-card full-timer-card" style={{ marginTop: 8 }}>
+            <div className="sim-progress-header">
+              <div className="sim-progress-title-row">
+                <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Running SUMO sandbox simulation…</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    {simProgress?.stage_label || 'Simulating custom signal timings in TraCI…'}
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
+
+            <div className="sim-timer-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 6, margin: '8px 0' }}>
+              <div className="sim-timer-box elapsed" style={{ padding: '6px 8px' }}>
+                <span className="sim-timer-label" style={{ fontSize: 9 }}>⏱️ Elapsed</span>
+                <span className="sim-timer-value digital-clock" style={{ fontSize: 12 }}>
+                  {formatElapsed(elapsedSeconds)}
+                </span>
+              </div>
+              <div className="sim-timer-box eta" style={{ padding: '6px 8px' }}>
+                <span className="sim-timer-label" style={{ fontSize: 9 }}>⏳ ETA</span>
+                <span className="sim-timer-value eta-highlight" style={{ fontSize: 12 }}>
+                  {formatETA(simProgress?.eta_s)}
+                </span>
+              </div>
+            </div>
+
+            <div className="sim-bar-wrapper" style={{ marginTop: 4 }}>
+              <div className="sim-bar-labels" style={{ fontSize: 10 }}>
+                <span>Simulating Steps</span>
+                <span>{simProgress?.progress ? `${Math.round(simProgress.progress)}%` : '0%'}</span>
+              </div>
+              <div className="sim-bar-track" style={{ height: 4 }}>
+                <div
+                  className="sim-bar-fill"
+                  style={{
+                    width: `${Math.min(100, Math.max(simProgress?.progress || 2, 2))}%`,
+                    background: 'linear-gradient(90deg, #6366f1, #38bdf8)',
+                  }}
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -1287,6 +2040,8 @@ function SignalSandboxPanel({
               })}
             </div>
           </div>
+        )}
+        </>
         )}
       </div>
     </div>

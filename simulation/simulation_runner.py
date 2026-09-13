@@ -395,7 +395,12 @@ def run_simulation(
     if engine == "synthetic":
         result = SyntheticSimulator(G, duration_s, seed, apply_proposals).run()
     elif engine == "sumo":
-        result = _run_sumo(G, duration_s, seed, scenario_id)
+        try:
+            from simulation.traci_interface import SUMOTraCIInterface
+            result = SUMOTraCIInterface(G, duration_s, seed, scenario_id).run()
+        except RuntimeError as sumo_err:
+            # SUMO binary or TraCI not available — propagate clearly to API layer
+            raise RuntimeError(str(sumo_err)) from sumo_err
     elif engine == "cityflow":
         result = _run_cityflow(G, duration_s, seed)
     else:

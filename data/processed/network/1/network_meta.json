@@ -1,0 +1,15 @@
+{
+  "source": "Davanagere, Karnataka, India",
+  "generated_at": "2026-09-03T10:28:44.828017",
+  "nodes": 2411,
+  "edges": 7067,
+  "total_length_km": 514.41,
+  "avg_speed_kph": 27.9,
+  "bbox": {
+    "north": 14.4805796,
+    "south": 14.4482334,
+    "east": 75.9384588,
+    "west": 75.9050459
+  },
+  "crs": "EPSG:4326"
+}

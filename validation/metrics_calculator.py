@@ -5,25 +5,28 @@ Computes KPIs from simulation telemetry.
 
 KPIs computed
 ─────────────
-  avg_travel_time_s    : Mean travel time per edge (seconds)
-  avg_wait_time_s      : Mean wait time per vehicle (seconds)
-  avg_speed_kph        : Mean simulated speed (km/h)
-  p85_travel_time_s    : 85th-percentile travel time
-  p85_wait_time_s      : 85th-percentile wait time
-  total_flow_veh_h     : Total vehicles / hour across all edges
-  throughput_index     : Actual flow as a fraction of total capacity
-  congested_edges      : Count of edges with occupancy > 0.75
-  congestion_ratio     : congested_edges / total_edges
-  emissions_proxy      : Relative fuel/emission index (higher = worse)
-                         Estimated from speed using simplified MOVES model:
-                         VSP ≈ a×v + b×v³ where a,b are road-type constants.
-  total_delay_s        : sum over all edges of (simulated_tt - free_flow_tt)
-  efficiency_score     : 0–100 composite score (100 = perfect flow)
+  avg_travel_time_s           : Mean travel time per edge (seconds)
+  avg_wait_time_s             : Mean wait time per vehicle (seconds)
+  avg_speed_kph               : Mean simulated speed (km/h)
+  p85_travel_time_s           : 85th-percentile travel time
+  p85_wait_time_s             : 85th-percentile wait time
+  total_flow_veh_h            : Total vehicles / hour across all edges
+  throughput_index            : Actual flow as a fraction of total capacity
+  congested_edges             : Count of edges with occupancy > 0.75
+  congestion_ratio            : congested_edges / total_edges
+  emissions_proxy             : Relative fuel/emission index (higher = worse)
+                                Estimated from speed using simplified MOVES model:
+                                VSP ≈ a×v + b×v³ where a,b are road-type constants.
+  total_delay_s               : sum over all edges of (simulated_tt - free_flow_tt)
+  efficiency_score            : 0–100 composite score (100 = perfect flow)
+  weighted_intersection_delay : Flow-weighted delay (equ.md §1, HCM-based)
+  delay_entropy               : Shannon entropy of delay distribution (equ.md §2)
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import numpy as np
@@ -33,6 +36,54 @@ log = logging.getLogger("metrics_calculator")
 # MOVES-simplified emission coefficients (relative units)
 EMISSION_A = 0.0015   # rolling resistance + accessory term
 EMISSION_B = 0.000004  # aerodynamic drag term (v³ dominant at high speed)
+
+
+# ── Published equations from equ.md ──────────────────────────────────────────
+
+def weighted_intersection_delay(
+    total_delay: list[float],
+    flow_rate: list[float],
+    lane_count: list[float],
+) -> float:
+    """
+    Flow-weighted intersection delay (equ.md §1).
+
+        d'_I = sum(td_i) / sum(v_i * n_i)
+
+    Source: HCM-based metric used in RL traffic-signal research [web:60].
+
+    Parameters
+    ──────────
+    total_delay : td_i — total delay per movement / edge (seconds)
+    flow_rate   : v_i  — vehicle flow per movement (veh/h)
+    lane_count  : n_i  — lane count per movement
+
+    Returns
+    ───────
+    Delay in seconds per vehicle-lane unit.  0.0 if denominator ≤ 0.
+    """
+    denominator = sum(v * n for v, n in zip(flow_rate, lane_count))
+    if denominator <= 0:
+        return 0.0
+    return sum(total_delay) / denominator
+
+
+def delay_entropy(total_delay: list[float]) -> float:
+    """
+    Shannon entropy of the delay distribution (equ.md §2).
+
+        H_t = -sum(p_i * ln(p_i))   where p_i = td_i / sum(td_j)
+
+    Higher entropy = delay is spread more evenly across movements.
+    Lower entropy = delay is concentrated in one or few movements.
+
+    Source: Published RL traffic-signal research [web:60].
+    """
+    total = sum(d for d in total_delay if d > 0)
+    if total <= 0:
+        return 0.0
+    probs = [d / total for d in total_delay if d > 0]
+    return -sum(p * math.log(p) for p in probs)
 
 
 def compute_metrics(telemetry: dict) -> dict:
@@ -129,23 +180,35 @@ def compute_metrics(telemetry: dict) -> dict:
     eff_score = 100.0 - (active_congestion_ratio * 40.0) - (min(avg_wait, 60.0) / 60.0 * 30.0)
     efficiency_score = round(float(np.clip(eff_score, 0.0, 100.0)), 1)
 
+    # ── equ.md §1 — Weighted Intersection Delay ──────────────────────────────
+    edge_wait_list  = [e.get("wait_time", 0) for e in edges]
+    edge_flow_list  = [max(e.get("flow", 0), 0) for e in edges]
+    edge_lanes_list = [max(e.get("lanes", 1), 1) for e in edges]
+    wid = weighted_intersection_delay(edge_wait_list, edge_flow_list, edge_lanes_list)
+
+    # ── equ.md §2 — Delay Entropy ─────────────────────────────────────────────
+    d_ent = delay_entropy([e.get("wait_time", 0) for e in edges])
+
     metrics = {
-        "avg_travel_time_s":   round(float(np.mean(active_travel_times)), 2),
-        "p85_travel_time_s":   round(float(np.percentile(active_travel_times, 85)), 2),
-        "avg_wait_time_s":     avg_wait,
-        "p85_wait_time_s":     round(float(np.percentile(wait_times, 85)), 2),
-        "avg_speed_kph":       round(float(np.mean(active_speeds)), 2),
-        "total_flow_veh_h":    round(total_flow, 0),
-        "throughput_index":    round(throughput_i, 4),
-        "congested_edges":     int(congested_mask.sum()),
-        "total_edges":         len(edges),
-        "congestion_ratio":    round(active_congestion_ratio, 4),
-        "total_delay_s":       round(float(delays.sum()), 2),
-        "avg_delay_s":         round(float(delays.mean()), 2),
-        "emissions_proxy":     round(emissions_proxy, 4),
-        "noise_pollution_db":  round(noise_pollution_db, 2),
-        "efficiency_score":    min(100.0, max(0.0, efficiency_score)),
-        "level_of_service":    los,
+        "avg_travel_time_s":           round(float(np.mean(active_travel_times)), 2),
+        "p85_travel_time_s":           round(float(np.percentile(active_travel_times, 85)), 2),
+        "avg_wait_time_s":             avg_wait,
+        "p85_wait_time_s":             round(float(np.percentile(wait_times, 85)), 2),
+        "avg_speed_kph":               round(float(np.mean(active_speeds)), 2),
+        "total_flow_veh_h":            round(total_flow, 0),
+        "throughput_index":            round(throughput_i, 4),
+        "congested_edges":             int(congested_mask.sum()),
+        "total_edges":                 len(edges),
+        "congestion_ratio":            round(active_congestion_ratio, 4),
+        "total_delay_s":               round(float(delays.sum()), 2),
+        "avg_delay_s":                 round(float(delays.mean()), 2),
+        "emissions_proxy":             round(emissions_proxy, 4),
+        "noise_pollution_db":          round(noise_pollution_db, 2),
+        "efficiency_score":            min(100.0, max(0.0, efficiency_score)),
+        "level_of_service":            los,
+        # Published equations (equ.md)
+        "weighted_intersection_delay": round(wid, 4),   # §1
+        "delay_entropy":               round(d_ent, 4), # §2
     }
     log.info(
         f"Metrics: speed={metrics['avg_speed_kph']} km/h, "
@@ -166,6 +229,8 @@ def _zero_metrics() -> dict:
         "throughput_index": 0,  "congested_edges": 0,
         "total_edges": 0,       "congestion_ratio": 0,
         "total_delay_s": 0,     "avg_delay_s": 0,
-        "emissions_proxy": 0,   "noise_pollution_db": 0.0, "efficiency_score": 0,
-        "level_of_service": "A",
+        "emissions_proxy": 0,   "noise_pollution_db": 0.0,
+        "efficiency_score": 0,  "level_of_service": "A",
+        "weighted_intersection_delay": 0.0,  # equ.md §1
+        "delay_entropy": 0.0,               # equ.md §2
     }

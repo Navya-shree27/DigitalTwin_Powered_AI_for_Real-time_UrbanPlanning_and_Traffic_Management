@@ -4,7 +4,7 @@ const BASE_URL = '/api'
 
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 120000,  // 2 minutes — simulations can take time
+  timeout: 300000,  // 5 minutes — map downloads & full builds can take time
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -67,6 +67,12 @@ export const scenariosApi = {
 
   getProgress: (scenarioId) =>
     api.get(`/scenarios/${scenarioId}/progress`),
+
+  capacityAnalysis: (scenarioId, nodeId, payload) =>
+    api.post(`/scenarios/${scenarioId}/nodes/${nodeId}/capacity-analysis`, payload),
+
+  serviceDetour: (scenarioId, nodeId, payload) =>
+    api.post(`/scenarios/${scenarioId}/nodes/${nodeId}/service-detour`, payload),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -83,6 +89,20 @@ export const dashboardApi = {
     api.get(`/dashboard/${scenarioId}/telemetry?t=${Date.now()}`),
 }
 
+// ── Google Maps Platform ───────────────────────────────────────────────────────
+
+export const googleMapsApi = {
+  getStatus: () => api.get('/google-maps/status'),
+  getStreetView: (lat, lon, params = {}) =>
+    api.get('/google-maps/street-view', { params: { lat, lon, ...params } }),
+  trafficCompare: (payload) =>
+    api.post('/google-maps/traffic-compare', payload),
+  getNearbyPois: (lat, lon, radius_m = 500) =>
+    api.get('/google-maps/nearby-pois', { params: { lat, lon, radius_m } }),
+  geocode: (query) =>
+    api.get('/google-maps/geocode', { params: { query } }),
+}
+
 // ── Proposals ─────────────────────────────────────────────────────────────────
 
 export const proposalsApi = {
@@ -94,6 +114,10 @@ export const proposalsApi = {
 
 export const systemApi = {
   health: () => axios.get('/health').then((r) => r.data),
+}
+
+export const statusApi = {
+  get: () => api.get('/status'),
 }
 
 export default api

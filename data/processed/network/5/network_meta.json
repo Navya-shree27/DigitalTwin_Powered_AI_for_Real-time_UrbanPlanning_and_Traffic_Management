@@ -1,15 +1,15 @@
 {
-  "source": "Davanagere, Karnataka, India",
-  "generated_at": "2026-07-29T00:18:23.694685",
-  "nodes": 16343,
-  "edges": 45841,
-  "total_length_km": 10947.26,
-  "avg_speed_kph": 29.2,
+  "source": "Indiranagar, Bengaluru, Karnataka, India",
+  "generated_at": "2026-09-03T09:48:13.726792",
+  "nodes": 2296,
+  "edges": 5922,
+  "total_length_km": 370.77,
+  "avg_speed_kph": 28.7,
   "bbox": {
-    "north": 14.6877534,
-    "south": 13.8226312,
-    "east": 76.5134793,
-    "west": 75.4545079
+    "north": 12.994537,
+    "south": 12.962198,
+    "east": 77.6574333,
+    "west": 77.6242469
   },
   "crs": "EPSG:4326"
 }

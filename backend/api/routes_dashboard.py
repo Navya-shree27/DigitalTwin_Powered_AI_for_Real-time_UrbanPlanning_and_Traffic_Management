@@ -235,25 +235,26 @@ def get_network_geojson(scenario_id: int):
     scenario_dir = ROOT / "data" / "processed" / "network" / str(scenario_id)
     path = scenario_dir / "network.geojson"
 
-    # Self-healing fallback: if scenario-specific network files don't exist, build them
+    # Fast fallback to global network if scenario-specific doesn't exist
     if not path.exists():
-        from backend.database.db_connector import SessionLocal
-        from backend.models.schema import Scenario
-        db = SessionLocal()
-        try:
-            scenario = db.query(Scenario).get(scenario_id)
-            if scenario:
-                log.info(f"Self-healing: Auto-building scenario-specific network for Scenario {scenario_id} ({scenario.city})")
-                from simulation.osm_to_network import build_network
-                build_network(city=scenario.city, scenario_id=scenario_id)
-        except Exception as e:
-            log.warning(f"Failed auto-building network for scenario {scenario_id}: {e}")
-        finally:
-            db.close()
-
-    # Fallback to global if still doesn't exist
-    if not path.exists():
-        path = NETWORK_GEOJSON
+        if NETWORK_GEOJSON.exists():
+            path = NETWORK_GEOJSON
+        else:
+            from backend.database.db_connector import SessionLocal
+            from backend.models.schema import Scenario
+            db = SessionLocal()
+            try:
+                scenario = db.query(Scenario).get(scenario_id)
+                if scenario:
+                    log.info(f"Self-healing: Auto-building scenario-specific network for Scenario {scenario_id} ({scenario.city})")
+                    from simulation.osm_to_network import build_network
+                    build_network(city=scenario.city, scenario_id=scenario_id)
+                    if (scenario_dir / "network.geojson").exists():
+                        path = scenario_dir / "network.geojson"
+            except Exception as e:
+                log.warning(f"Failed auto-building network for scenario {scenario_id}: {e}")
+            finally:
+                db.close()
 
     if not path.exists():
         raise HTTPException(404, "Network GeoJSON not found.")

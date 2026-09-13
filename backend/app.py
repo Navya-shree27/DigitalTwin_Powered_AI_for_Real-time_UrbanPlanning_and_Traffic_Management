@@ -34,6 +34,8 @@ from backend.database.db_connector import init_db
 from backend.api.routes_simulation import router as simulation_router, scenario_router
 from backend.api.routes_ai import router as ai_router
 from backend.api.routes_dashboard import router as dashboard_router
+from backend.api.routes_status import router as status_router
+from backend.api.routes_google_maps import router as google_maps_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -71,6 +73,9 @@ app.include_router(simulation_router)
 app.include_router(scenario_router)
 app.include_router(ai_router)
 app.include_router(dashboard_router)
+app.include_router(status_router)
+app.include_router(google_maps_router)
+
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
