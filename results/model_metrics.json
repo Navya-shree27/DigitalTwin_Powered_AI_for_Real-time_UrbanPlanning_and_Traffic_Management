@@ -1,0 +1,70 @@
+{
+  "evaluation_timestamp": "2026-09-02T00:25:18.201097",
+  "model_type": "RandomForestClassifier",
+  "dataset_type": "SYNTHETIC_SIMULATION_DATA",
+  "num_test_samples": 82500,
+  "num_classes": 3,
+  "class_names": [
+    "Low",
+    "Moderate",
+    "Severe"
+  ],
+  "metrics": {
+    "accuracy": 0.7952,
+    "precision_macro": 0.5521,
+    "precision_weighted": 0.9194,
+    "recall_macro": 0.6627,
+    "recall_weighted": 0.7952,
+    "f1_score_macro": 0.5573,
+    "f1_score_weighted": 0.8362
+  },
+  "per_class_metrics": {
+    "Low": {
+      "precision": 0.9865,
+      "recall": 0.7969,
+      "f1_score": 0.8816,
+      "support": 74604
+    },
+    "Moderate": {
+      "precision": 0.2723,
+      "recall": 0.8254,
+      "f1_score": 0.4095,
+      "support": 7092
+    },
+    "Severe": {
+      "precision": 0.3973,
+      "recall": 0.3657,
+      "f1_score": 0.3808,
+      "support": 804
+    }
+  },
+  "confusion_matrix": [
+    [
+      59452,
+      15133,
+      19
+    ],
+    [
+      811,
+      5854,
+      427
+    ],
+    [
+      1,
+      509,
+      294
+    ]
+  ],
+  "top_features": {
+    "occupancy_t": 0.17499,
+    "speed_ratio_t": 0.14781,
+    "density_t": 0.1109,
+    "occ_lag1": 0.08185,
+    "scenario_demand": 0.06902,
+    "flow_t": 0.0688,
+    "flow_lag1": 0.06312,
+    "time_step": 0.04339,
+    "speed_sim_t": 0.03099,
+    "speed_lag1": 0.03082
+  }
+}
