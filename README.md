@@ -129,8 +129,8 @@ The outline below highlights the main modules currently present in the repositor
 │   ├── src/                        # React application and UI components
 │   ├── package.json
 │   └── index.html
-├── ml/                             # ML pipeline modules, if present in your checkout
-├── models/                         # Model artifacts, if generated/configured
+├── ml/                             # Dataset generation, preprocessing, training, evaluation, inference
+├── models/                         # Persisted model/preprocessor artifacts and feature schema
 ├── results/
 │   ├── model_metrics.json          # Recorded evaluation metrics
 │   ├── confusion_matrix.png        # Confusion matrix visualization
@@ -151,7 +151,7 @@ The outline below highlights the main modules currently present in the repositor
 └── README.md
 ```
 
-**Note:** The ML and models directories above describe the intended subsystem and may not be present as top-level directories in every checkout. Follow the tracked files and scripts in your current branch when running model-training commands.
+The `ml/` and `models/` directories are present in the repository. Trained model binaries and generated datasets may still need to be created locally, depending on which artifacts are tracked in your checkout.
 
 ## Prerequisites
 
@@ -317,6 +317,28 @@ Available artifacts:
 - [Feature importance](results/feature_importance.png)
 
 The results folder contains evaluation artifacts. Reproduce a training/evaluation run only using the training scripts and dataset generator present in your current checkout; generated datasets and model files may need to be created first.
+
+## Machine Learning Workflow
+
+The ML pipeline can generate a synthetic future-congestion dataset, train a Random Forest classifier, evaluate it on a held-out test split, and run sample inference. Dataset generation may need a processed OSM road network; if it is missing, the generator attempts to build one using the configured OpenStreetMap workflow.
+
+Run these commands from the repository root:
+
+```bash
+# Generate a synthetic traffic dataset (optional; training can generate it if absent)
+python -m ml.dataset_generator --scenarios 30 --timesteps 12 --output data/processed/simulation_traffic_dataset.csv
+
+# Train and save the model and preprocessing artifacts
+python -m ml.train_model
+
+# Evaluate the saved model and refresh metrics/plots in results/
+python -m ml.evaluate
+
+# Run sample predictions
+python -m ml.predict
+```
+
+The default training pipeline looks for `data/processed/simulation_traffic_dataset.csv` and writes model artifacts under `models/`. Evaluation requires a trained model and preprocessor. The dataset is simulation-generated, so evaluation metrics measure performance against the generated labels and are not a substitute for validation using real-world traffic observations.
 
 ## Testing
 
