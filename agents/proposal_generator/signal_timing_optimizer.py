@@ -165,6 +165,9 @@ class SignalTimingOptimizer:
                 "method":             "Webster",
                 "reduction_pct":      expected_wait_reduction_pct,
                 "wait_modifier":      round(1.0 - expected_wait_reduction_pct / 100.0, 3),
+                "node_id":            node_id,
+                "target_node":        node_id,
+                "type":               "signal_timing",
             }
 
             # Estimate improvement

@@ -342,14 +342,18 @@ export default function Dashboard() {
                       <div className="empty-state-desc">No proposals generated yet.</div>
                     </div>
                   )}
-                  {proposals.map(p => (
-                    <ProposalCard
-                      key={p.id}
-                      proposal={p}
-                      scenarioId={activeScenarioId}
-                      onValidated={() => loadDashboard(activeScenarioId)}
-                    />
-                  ))}
+                  {proposals.map(p => {
+                    const vp = dashboardData?.validated_proposals?.find(v => v.proposal?.id === p.id)
+                    return (
+                      <ProposalCard
+                        key={p.id}
+                        proposal={p}
+                        initialValidation={vp?.validation || null}
+                        scenarioId={activeScenarioId}
+                        onValidated={() => loadDashboard(activeScenarioId)}
+                      />
+                    )
+                  })}
                 </div>
               </div>
             ) : (
@@ -385,9 +389,23 @@ export default function Dashboard() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function ProposalCard({ proposal, scenarioId, onValidated }) {
+function ProposalCard({ proposal, initialValidation, scenarioId, onValidated }) {
   const [validating, setValidating] = useState(false)
-  const [result, setResult] = useState(null)
+  const [result, setResult] = useState(initialValidation || null)
+
+  useEffect(() => {
+    if (initialValidation) {
+      setResult(initialValidation)
+    } else if (proposal.validated && !result) {
+      let active = true
+      proposalsApi.get(proposal.id).then(data => {
+        if (active && data?.validation) {
+          setResult(data.validation)
+        }
+      }).catch(() => {})
+      return () => { active = false }
+    }
+  }, [initialValidation, proposal.validated, proposal.id])
 
   const typeColors = {
     signal_timing:    'var(--accent-primary)',
@@ -401,17 +419,42 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
   }
 
   const handleValidate = async () => {
+    if (validating) return
     setValidating(true)
     try {
-      const { proposalsApi: pApi } = await import('../services/apiClient.js')
-      await pApi.validate(proposal.id)
-      // Poll for result
-      setTimeout(async () => {
-        const data = await pApi.get(proposal.id)
-        setResult(data.validation)
+      const resp = await proposalsApi.validate(proposal.id)
+      if (resp?.validation) {
+        setResult(resp.validation)
         onValidated()
         setValidating(false)
-      }, 3000)
+        return
+      }
+
+      // Poll every 2.5s while backend simulation runs (typical duration ~15-25s)
+      const pollInterval = 2500
+      const maxAttempts = 30 // up to ~75s
+      let attempts = 0
+
+      const pollTimer = setInterval(async () => {
+        attempts++
+        try {
+          const data = await proposalsApi.get(proposal.id)
+          if (data?.validation) {
+            clearInterval(pollTimer)
+            setResult(data.validation)
+            onValidated()
+            setValidating(false)
+          } else if (attempts >= maxAttempts) {
+            clearInterval(pollTimer)
+            setValidating(false)
+          }
+        } catch {
+          if (attempts >= maxAttempts) {
+            clearInterval(pollTimer)
+            setValidating(false)
+          }
+        }
+      }, pollInterval)
     } catch {
       setValidating(false)
     }
@@ -427,7 +470,13 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
           </div>
         </div>
         {proposal.validated && (
-          <span className={`badge badge-${result?.verdict === 'APPROVED' ? 'approved' : 'rejected'}`}>
+          <span className={`badge ${
+            result?.verdict === 'APPROVED'
+              ? 'badge-approved'
+              : result?.verdict === 'APPROVED_WITH_CONDITIONS'
+              ? 'badge-moderate'
+              : 'badge-rejected'
+          }`}>
             {result?.verdict || 'Validated'}
           </span>
         )}
@@ -438,7 +487,15 @@ function ProposalCard({ proposal, scenarioId, onValidated }) {
       {result && (
         <div className="proposal-result">
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>IMPROVEMENT SCORE</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: result.verdict === 'APPROVED' ? 'var(--accent-success)' : 'var(--accent-warning)' }}>
+          <div style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: result.verdict === 'APPROVED'
+              ? 'var(--accent-success)'
+              : result.verdict === 'APPROVED_WITH_CONDITIONS'
+              ? 'var(--accent-warning)'
+              : 'var(--accent-danger)'
+          }}>
             {result.improvement_score}/100
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{result.summary?.slice(0, 80)}…</div>

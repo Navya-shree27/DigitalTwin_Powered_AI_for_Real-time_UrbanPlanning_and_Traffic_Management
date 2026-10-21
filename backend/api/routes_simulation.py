@@ -137,6 +137,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         db.add(run)
 
         # Persist issues (cap at 200 to avoid DB bloat in Phase A)
+        issue_id_map: dict[str, int] = {}
         for issue_data in all_issues[:200]:
             issue = Issue(
                 run_id      = run_id,
@@ -149,11 +150,14 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
                 metrics_json  = json.dumps(issue_data.get("metrics", {})),
             )
             db.add(issue)
+            db.flush()
+            issue_id_map[issue_data["issue_id"]] = issue.id
 
         # Persist proposals (cap at 50)
         for prop_data in all_proposals[:50]:
             proposal = Proposal(
                 run_id      = run_id,
+                issue_id_fk = issue_id_map.get(prop_data.get("issue_id")),
                 proposal_id = prop_data["proposal_id"],
                 type        = prop_data["type"],
                 subtype     = prop_data.get("subtype"),
@@ -167,6 +171,7 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         log.info(f"Pipeline complete: run {run_id} — {len(all_issues)} issues, {len(all_proposals)} proposals.")
 
     except Exception as e:
+        db.rollback()
         log.error(f"Pipeline failed for run {run_id}: {e}", exc_info=True)
         run = db.query(SimulationRun).get(run_id)
         if run:

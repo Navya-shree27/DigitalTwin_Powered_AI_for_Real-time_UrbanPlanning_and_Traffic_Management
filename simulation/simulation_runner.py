@@ -118,10 +118,20 @@ class SyntheticSimulator:
     BPR_ALPHA = 0.15
     BPR_BETA  = 4.0
 
-    def __init__(self, G: nx.MultiDiGraph, duration_s: int, seed: int, apply_proposals: list[dict] | None = None):
+    def __init__(
+        self,
+        G: nx.MultiDiGraph,
+        duration_s: int,
+        seed: int,
+        apply_proposals: list[dict] | None = None,
+        demand_multiplier: float | None = None,
+    ):
         self.G = G
         self.duration_s = duration_s
+        self.seed = seed
         self.apply_proposals = apply_proposals or []
+        self._custom_demand_multiplier = demand_multiplier
+        self.rng = np.random.RandomState(seed)
         np.random.seed(seed)
         random.seed(seed)
         self._degree_cache: dict[int, int] = dict(G.degree())
@@ -132,10 +142,12 @@ class SyntheticSimulator:
         """
         Simulate a 'peak hour' demand: returns a value between 0.3 and 1.0
         representing the overall demand level for this run.
-        Currently sampled uniformly; in Phase B this will be driven by a
-        real demand scenario file.
+        If a custom demand_multiplier is supplied (e.g. from baseline run),
+        reuse it for exact reproducible comparison.
         """
-        return float(np.random.uniform(0.55, 0.90))
+        if self._custom_demand_multiplier is not None:
+            return float(self._custom_demand_multiplier)
+        return float(self.rng.uniform(0.55, 0.90))
 
     # ── BPR speed–flow ────────────────────────────────────────────────────────
 
@@ -161,7 +173,7 @@ class SyntheticSimulator:
             # Degree-weighted base demand: busier nodes → more flow
             avg_degree  = (self._degree_cache.get(u, 2) + self._degree_cache.get(v, 2)) / 2
             degree_scale = min(avg_degree / 4.0, 1.0)
-            noise = float(np.random.normal(0, 0.08))
+            noise = float(self.rng.normal(0, 0.08))
 
             flow_ratio = float(np.clip(demand_mult * degree_scale + noise, 0.05, 1.15))
             flow       = flow_ratio * capacity  # vehicles / hour
@@ -185,7 +197,7 @@ class SyntheticSimulator:
             # Derived metrics
             density    = flow / max(sim_speed, 1)            # veh/km  (Greenshields)
             queue      = max(0.0, (flow_ratio - 0.75) * capacity * 0.02) * edge_wait_mod  # veh
-            wait_time  = max(0.0, (delay_component + float(np.random.exponential(2))) * edge_wait_mod)
+            wait_time  = max(0.0, (delay_component + float(self.rng.exponential(2))) * edge_wait_mod)
             occupancy  = float(np.clip(flow / capacity, 0, 1))
 
             records.append({
@@ -225,7 +237,7 @@ class SyntheticSimulator:
             avg_flow = np.mean(in_flows)
 
             conflict_rate = float(np.clip(
-                avg_flow * sc / 3000 + np.random.exponential(0.05), 0, 5
+                avg_flow * sc / 3000 + self.rng.exponential(0.05), 0, 5
             ))
 
             # Calculate wait modifier based on applied signal timing proposals
@@ -236,7 +248,7 @@ class SyntheticSimulator:
                     wait_modifier *= norm_p["wait_modifier"]
 
             avg_wait = float(np.clip(
-                (np.random.gamma(2, scale=5) + (avg_flow / 1000 * 8)) * wait_modifier, 0, 120
+                (self.rng.gamma(2, scale=5) + (avg_flow / 1000 * 8)) * wait_modifier, 0, 120
             ))
 
             records.append({
@@ -323,6 +335,7 @@ def run_simulation(
     duration_s: int | None = None,
     seed: int | None = None,
     apply_proposals: list[dict] | None = None,
+    demand_multiplier: float | None = None,
 ) -> dict:
     """
     Run a traffic simulation for *scenario_id* and return the full telemetry
@@ -330,12 +343,13 @@ def run_simulation(
 
     Parameters
     ──────────
-    scenario_id     : DB id of the scenario being simulated.
-    engine          : "synthetic" | "sumo" | "cityflow" (defaults to .env).
-    duration_s      : Simulation window in seconds (defaults to .env).
-    seed            : Random seed for reproducibility.
-    apply_proposals : Optional list of proposal dicts to apply before
-                      running (for validation/re-simulation).
+    scenario_id       : DB id of the scenario being simulated.
+    engine            : "synthetic" | "sumo" | "cityflow" (defaults to .env).
+    duration_s        : Simulation window in seconds (defaults to .env).
+    seed              : Random seed for reproducibility.
+    apply_proposals   : Optional list of proposal dicts to apply before
+                        running (for validation/re-simulation).
+    demand_multiplier : Optional demand multiplier to replicate baseline traffic demand.
     """
     engine     = engine     or os.getenv("SIMULATION_ENGINE", "synthetic")
     duration_s = duration_s or int(os.getenv("SIMULATION_DURATION", "3600"))
@@ -350,7 +364,7 @@ def run_simulation(
         G = _apply_proposals_to_graph(G, apply_proposals)
 
     if engine == "synthetic":
-        result = SyntheticSimulator(G, duration_s, seed, apply_proposals).run()
+        result = SyntheticSimulator(G, duration_s, seed, apply_proposals, demand_multiplier=demand_multiplier).run()
     elif engine == "sumo":
         result = _run_sumo(G, duration_s, seed)
     elif engine == "cityflow":
@@ -358,11 +372,12 @@ def run_simulation(
     else:
         raise ValueError(f"Unknown engine: {engine!r}")
 
+    from datetime import datetime, timezone
     result.update({
         "scenario_id":    scenario_id,
         "duration_s":     duration_s,
         "seed":           seed,
-        "generated_at":   __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "generated_at":   datetime.now(timezone.utc).isoformat(),
         "proposals_applied": apply_proposals or [],
     })
     return result
@@ -383,6 +398,7 @@ def _normalize_proposal_dict(p: dict) -> dict:
     params = p.get("parameters", {}) if isinstance(p.get("parameters"), dict) else {}
     loc = p.get("location", {}) if isinstance(p.get("location"), dict) else {}
     imp = p.get("expected_improvement", {}) if isinstance(p.get("expected_improvement"), dict) else {}
+    pid = str(p.get("proposal_id") or params.get("proposal_id") or "")
 
     ptype = (
         p.get("intervention_type")
@@ -391,6 +407,13 @@ def _normalize_proposal_dict(p: dict) -> dict:
         or params.get("type")
         or ""
     )
+    if not ptype and pid:
+        if pid.startswith("signal_"):
+            ptype = "signal_timing"
+        elif pid.startswith("lane_"):
+            ptype = "lane_change"
+        elif pid.startswith("diversion_"):
+            ptype = "route_diversion"
 
     # Edge identifier
     target_edge = (
@@ -414,6 +437,14 @@ def _normalize_proposal_dict(p: dict) -> dict:
         or params.get("node_id")
         or loc.get("node_id")
     )
+    if target_node is None and ptype in ("signal_timing", "signal_optimization") and pid.startswith("signal_"):
+        parts = pid.split("_")
+        if len(parts) >= 2:
+            try:
+                target_node = int(parts[1])
+            except (ValueError, TypeError):
+                target_node = None
+
     if target_node is not None:
         try:
             target_node = int(target_node)

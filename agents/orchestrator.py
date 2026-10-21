@@ -253,6 +253,7 @@ class MultiAgentOrchestrator:
                     duration_s=baseline_telemetry.get("duration_s", 3600),
                     seed=baseline_telemetry.get("seed", 42),
                     apply_proposals=[std_cand],
+                    demand_multiplier=baseline_telemetry.get("demand_multiplier"),
                 )
                 cand_kpis = compute_metrics(cand_tel)
                 comparison = compare(

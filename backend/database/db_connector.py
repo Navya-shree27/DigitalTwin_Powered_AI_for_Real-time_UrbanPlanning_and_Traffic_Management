@@ -24,12 +24,28 @@ log = logging.getLogger("db_connector")
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{ROOT / 'digital_twin.db'}")
 
-# SQLite: allow check_same_thread=False so FastAPI can use it in async context
+# SQLite: allow check_same_thread=False and set a 30s busy timeout
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30.0  # seconds
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args, echo=False)
+
+if DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA busy_timeout=30000;")  # 30,000 ms
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.close()
+        except Exception as err:
+            log.warning(f"Could not configure SQLite pragmas: {err}")
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -50,6 +66,16 @@ def init_db() -> None:
     """Create all tables defined in schema.py (idempotent)."""
     from backend.models import schema  # noqa: F401 — ensures models are registered
     from sqlalchemy import inspect, text
+
+    if DATABASE_URL.startswith("sqlite"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL;"))
+                conn.execute(text("PRAGMA busy_timeout=30000;"))
+                conn.execute(text("PRAGMA synchronous=NORMAL;"))
+        except Exception as err:
+            log.warning(f"Could not enable WAL mode in init_db: {err}")
+
     Base.metadata.create_all(bind=engine)
     log.info(f"Database initialised: {DATABASE_URL}")
 
