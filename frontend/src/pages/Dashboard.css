@@ -20,13 +20,8 @@
   gap: 12px;
   flex-shrink: 0;
   z-index: 100;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
   white-space: nowrap;
-  scrollbar-width: none;
-}
-.dashboard-header::-webkit-scrollbar {
-  display: none;
 }
 
 .header-left {
@@ -41,6 +36,8 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  position: relative;
+  overflow: visible;
 }
 
 .header-right {

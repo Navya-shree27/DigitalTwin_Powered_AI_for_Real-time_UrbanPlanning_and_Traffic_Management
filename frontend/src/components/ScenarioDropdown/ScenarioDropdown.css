@@ -3,6 +3,7 @@
   display: inline-block;
   user-select: none;
   font-family: inherit;
+  z-index: 105;
 }
 
 .scenario-dropdown-trigger {
