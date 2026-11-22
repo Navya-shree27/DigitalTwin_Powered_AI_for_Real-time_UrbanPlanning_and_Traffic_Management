@@ -2,18 +2,6 @@
   "1": [
     {
       "scenario_id": 1,
-      "cycle": 7,
-      "timestamp": "2026-11-22T10:52:57.354737+00:00",
-      "summary": "**Summary of Overall Traffic Health:**\nThe network's traffic health is generally good, with an average speed of 29.2 km/h and no wait times. However, a closer examination reveals 5 congested edges, indicating potential bottlenecks that require attention.\n\n**Top 3 Critical Issues:**\n\n1. **Edge 311893\u2026",
-      "key_metrics": {
-        "avg_speed_kph": 27.95,
-        "avg_travel_time_s": 9.55,
-        "congestion_ratio": 0.0006,
-        "severe_issues": 3
-      }
-    },
-    {
-      "scenario_id": 1,
       "cycle": 8,
       "timestamp": "2026-11-22T10:54:21.843431+00:00",
       "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and no wait times, indicating efficient traffic flow. However, a closer examination reveals 5 congested edges, suggesting potential bottlenecks that require\u2026",
@@ -119,6 +107,18 @@
         "congestion_ratio": 0.0003,
         "severe_issues": 2
       }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 19,
+      "timestamp": "2026-11-22T15:06:23.438373+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 27.9 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (2 of\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.94,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0003,
+        "severe_issues": 2
+      }
     }
   ],
   "2": [
@@ -157,6 +157,30 @@
         "congestion_ratio": 0.0002,
         "severe_issues": 0
       }
+    },
+    {
+      "scenario_id": 2,
+      "cycle": 4,
+      "timestamp": "2026-11-22T15:40:33.668617+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 28.6 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (1 of\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 28.65,
+        "avg_travel_time_s": 7.96,
+        "congestion_ratio": 0.0002,
+        "severe_issues": 0
+      }
+    },
+    {
+      "scenario_id": 2,
+      "cycle": 5,
+      "timestamp": "2026-11-22T15:41:55.094710+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 28.6 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (1 of\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 28.65,
+        "avg_travel_time_s": 7.96,
+        "congestion_ratio": 0.0002,
+        "severe_issues": 0
+      }
     }
   ],
   "3": [
@@ -181,6 +205,30 @@
         "avg_speed_kph": 27.95,
         "avg_travel_time_s": 9.55,
         "congestion_ratio": 0.0006,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 3,
+      "cycle": 3,
+      "timestamp": "2026-11-22T16:07:36.619416+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 32.6 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.1% (4 of\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 32.62,
+        "avg_travel_time_s": 6.89,
+        "congestion_ratio": 0.0005,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 3,
+      "cycle": 4,
+      "timestamp": "2026-11-22T18:01:36.884245+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 32.6 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.1% (4 of\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 32.62,
+        "avg_travel_time_s": 6.89,
+        "congestion_ratio": 0.0005,
         "severe_issues": 3
       }
     }

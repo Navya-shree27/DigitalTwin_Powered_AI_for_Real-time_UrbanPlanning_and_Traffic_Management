@@ -1,15 +1,15 @@
 {
-  "source": "Davanagere, Karnataka, India",
-  "generated_at": "2026-09-03T10:26:32.957524",
-  "nodes": 2411,
-  "edges": 7067,
-  "total_length_km": 514.41,
-  "avg_speed_kph": 27.9,
+  "source": "Silk Board, Silk Board Flyover, Venkatapura, Madiwala, Stage 2, Bommanahalli, Bengaluru, Karnataka 560102, India",
+  "generated_at": "2026-11-22T21:33:46.583919",
+  "nodes": 3526,
+  "edges": 8813,
+  "total_length_km": 540.33,
+  "avg_speed_kph": 32.7,
   "bbox": {
-    "north": 14.4805796,
-    "south": 14.4482334,
-    "east": 75.9384588,
-    "west": 75.9050459
+    "north": 12.9338956,
+    "south": 12.9015293,
+    "east": 77.6402476,
+    "west": 77.6071931
   },
   "crs": "EPSG:4326"
 }
