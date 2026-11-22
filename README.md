@@ -69,10 +69,10 @@ cp .env.example .env
 **Option A (Recommended — Direct via venv, no script activation needed):**
 ```powershell
 # Windows (PowerShell):
-.\venv\Scripts\uvicorn.exe backend.app:app --reload --port 8000
+.\venv\Scripts\uvicorn.exe backend.app:app --reload --reload-dir backend --reload-dir ai --reload-dir simulation --port 8000
 
 # Linux / macOS:
-./venv/bin/uvicorn backend.app:app --reload --port 8000
+./venv/bin/uvicorn backend.app:app --reload --reload-dir backend --reload-dir ai --reload-dir simulation --port 8000
 ```
 
 **Option B (With active virtual environment):**
@@ -81,7 +81,7 @@ cp .env.example .env
 # Windows (PowerShell): .\venv\Scripts\Activate.ps1
 # Linux / macOS:        source venv/bin/activate
 
-uvicorn backend.app:app --reload --port 8000
+uvicorn backend.app:app --reload --reload-dir backend --reload-dir ai --reload-dir simulation --port 8000
 ```
 
 > **Note on OSMnx / ModuleNotFoundError:** If you encounter `OSMnx is not installed in the active Python environment`, ensure you are launching Uvicorn using the `venv` path above and from the project root directory.

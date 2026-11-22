@@ -489,16 +489,14 @@ def get_signals_geojson(scenario_id: int, refresh: bool = False):
     scenario_dir.mkdir(parents=True, exist_ok=True)
     signals_cache_path = scenario_dir / "city_signals.geojson"
 
-    # Return disk cache unless caller forces a refresh or cache has outdated synthetic dummy IDs
+    # Return disk cache unless caller forces a refresh
     if not refresh and signals_cache_path.exists():
         try:
             with open(signals_cache_path, "r", encoding="utf-8") as f:
                 cached_data = json.load(f)
             feats = cached_data.get("features", [])
             if feats and len(feats) > 0:
-                has_dummy = any(feat.get("properties", {}).get("osmid", 0) >= 100000000 for feat in feats)
-                if not has_dummy:
-                    return Response(content=json.dumps(cached_data).encode(), media_type="application/geo+json")
+                return Response(content=json.dumps(cached_data).encode(), media_type="application/geo+json")
         except Exception as e:
             log.warning(f"Error reading signals cache: {e}")
 
