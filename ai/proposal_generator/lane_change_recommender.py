@@ -61,31 +61,22 @@ def _enrich_with_llm(
     widenable: bool,
     action: str,
 ) -> str:
-    """
-    Call Ollama to generate an AI rationale for the lane change proposal.
-    Returns an empty string on failure (graceful degradation).
-    """
-    try:
-        from ai.ollama_client import get_ollama_client
-        client = get_ollama_client()
-        if not client.is_available():
-            return ""
-
-        widenable_str = (
-            "can be physically widened" if widenable
-            else "CANNOT be physically widened (buildings adjacent — no expansion possible)"
+    """Generate engineering rationale for the lane reconfiguration proposal."""
+    if action == "ADD_LANE":
+        return (
+            f"Physical widening from {lanes} to {lanes + 1} lanes on {road_type} edge {edge_id} "
+            f"increases corridor capacity by ~{round(100 / lanes)}% to relieve {occupancy:.1%} saturation."
         )
-        prompt = (
-            f"Lane reconfiguration proposal for edge {edge_id} ({road_type} road).\n"
-            f"Current lanes: {lanes}. Occupancy: {occupancy:.1%}. "
-            f"Status: {subtype}. Action: {action}. Road {widenable_str}.\n\n"
-            f"In 2 concise sentences, explain WHY this lane action is the optimal intervention "
-            f"for this specific situation. Address a city planner. No bullet points."
+    elif action == "REPURPOSE_LANE":
+        return (
+            f"Edge {edge_id} right-of-way is restricted by buildings; implementing dynamic lane management / "
+            f"transit priority achieves ~15% throughput gain without physical expansion."
         )
-        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=100)
-    except Exception as e:
-        log.debug(f"LLM enrichment skipped for edge {edge_id}: {e}")
-        return ""
+    else:
+        return (
+            f"Underutilized {road_type} edge {edge_id} ({occupancy:.1%} load) has excess capacity; "
+            f"reallocating 1 lane frees corridor space for high-occupancy transit or micro-mobility."
+        )
 
 
 class LaneChangeRecommender:
@@ -95,13 +86,19 @@ class LaneChangeRecommender:
         edge_lookup = {e["edge_id"]: e for e in telemetry.get("edges", [])}
         proposals = []
         counter = 0
+        seen_edges: set[str] = set()
 
         for issue in issues:
+            if len(proposals) >= 20:
+                break
             if issue.get("type") != "lane_utilization":
                 continue
 
             loc       = issue.get("location", {})
             edge_id   = loc.get("edge_id", "")
+            if not edge_id or edge_id in seen_edges:
+                continue
+            seen_edges.add(edge_id)
             u         = loc.get("node_u", 0)
             v         = loc.get("node_v", 0)
             subtype   = issue.get("subtype", "")

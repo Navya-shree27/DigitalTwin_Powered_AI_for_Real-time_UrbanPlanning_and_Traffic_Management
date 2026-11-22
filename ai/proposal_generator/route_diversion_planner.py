@@ -45,29 +45,13 @@ def _enrich_with_llm(
     n_nodes: int,
     speed_ratio: float | None = None,
 ) -> str:
-    """
-    Call Ollama to generate an AI explanation for the route diversion.
-    Returns empty string on failure (graceful degradation).
-    """
-    try:
-        from ai.ollama_client import get_ollama_client
-        client = get_ollama_client()
-        if not client.is_available():
-            return ""
-
-        ratio_str = f", speed ratio {speed_ratio:.2f}" if speed_ratio is not None else ""
-        prompt = (
-            f"Route diversion proposal for a severely congested edge (ID: {edge_id}). "
-            f"Occupancy: {occupancy:.1%}{ratio_str}. "
-            f"Alternative path: {n_hops} hops through {n_nodes} nodes.\n\n"
-            f"In 2 concise sentences, explain WHY routing traffic away from this edge "
-            f"via the alternative path will improve network flow. "
-            f"Mention expected traffic redistribution effect. No bullet points."
-        )
-        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=100)
-    except Exception as e:
-        log.debug(f"LLM enrichment skipped for diversion {edge_id}: {e}")
-        return ""
+    """Generate engineering rationale for the route diversion proposal."""
+    ratio_str = f" (speed ratio {speed_ratio:.2f})" if speed_ratio is not None else ""
+    return (
+        f"Dynamic route diversion along {n_hops}-hop bypass ({n_nodes} nodes) "
+        f"alleviates severe bottleneck on edge {edge_id} (occupancy {occupancy:.1%}{ratio_str}), "
+        f"redistributing through traffic to parallel arterial capacity."
+    )
 
 
 def _make_proposal(
@@ -117,27 +101,36 @@ class RouteDiversionPlanner:
         proposals = []
         counter = 0
 
+        if G is None:
+            return []
+
+        # Build weighted DiGraph ONCE outside the loop for fast Dijkstra lookups
+        DG = nx.DiGraph()
+        for pu, pv, data in G.edges(data=True):
+            w = float(data.get("travel_time", data.get("length", 100) / 10))
+            DG.add_edge(pu, pv, weight=w)
+
         for issue in congestion_severe[:10]:   # cap to avoid long compute
             loc     = issue.get("location", {})
             edge_id = loc.get("edge_id", "")
-            u       = loc.get("node_u", 0)
-            v       = loc.get("node_v", 0)
+            u_raw   = loc.get("node_u", 0)
+            v_raw   = loc.get("node_v", 0)
             metrics = issue.get("metrics", {})
 
-            if not (u and v and G is not None):
-                proposals.append(self._stub_proposal(issue, edge_id, u, v, counter))
+            # Match node type (int or str) in DG
+            u = u_raw if u_raw in DG else str(u_raw) if str(u_raw) in DG else int(u_raw) if str(u_raw).isdigit() and int(u_raw) in DG else None
+            v = v_raw if v_raw in DG else str(v_raw) if str(v_raw) in DG else int(v_raw) if str(v_raw).isdigit() and int(v_raw) in DG else None
+
+            if u is None or v is None:
+                proposals.append(self._stub_proposal(issue, edge_id, u_raw, v_raw, counter))
                 counter += 1
                 continue
 
-            # Find alternative paths (fast Dijkstra on graph with congested edge removed)
+            # Find alternative path (temporarily remove congested edge to find detour)
+            had_edge = DG.has_edge(u, v)
+            edge_weight = DG[u][v].get("weight", 10.0) if had_edge else 10.0
             try:
-                DG = nx.DiGraph()
-                for pu, pv, data in G.edges(data=True):
-                    w = float(data.get("travel_time", data.get("length", 100) / 10))
-                    DG.add_edge(pu, pv, weight=w)
-
-                # Remove the congested edge (u -> v) to force finding a detour
-                if DG.has_edge(u, v):
+                if had_edge:
                     DG.remove_edge(u, v)
 
                 if nx.has_path(DG, u, v):
@@ -146,12 +139,14 @@ class RouteDiversionPlanner:
                     valid_alts = [(best_path, best_len)]
                 else:
                     valid_alts = []
-
             except Exception as e:
-                log.warning(f"Path search failed for edge {edge_id}: {e}")
-                proposals.append(self._stub_proposal(issue, edge_id, u, v, counter))
+                log.debug(f"Path search skipped for edge {edge_id}: {e}")
+                proposals.append(self._stub_proposal(issue, edge_id, u_raw, v_raw, counter))
                 counter += 1
                 continue
+            finally:
+                if had_edge:
+                    DG.add_edge(u, v, weight=edge_weight)
 
             if not valid_alts:
                 log.info(f"No valid alternative found for edge {edge_id}.")

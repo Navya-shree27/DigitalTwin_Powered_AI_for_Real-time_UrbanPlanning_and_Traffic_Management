@@ -64,12 +64,19 @@ def test_signal_placement_proposer():
             "location": {"node_id": "202", "lat": 14.465, "lon": 75.922},
             "metrics": {"avg_wait_time": 4.0, "conflict_rate": 0.05},
         },
+        {
+            "type": "signal_placement",
+            "subtype": "signal_relocate",
+            "location": {"node_id": "303", "lat": 14.466, "lon": 75.923},
+            "metrics": {"target_lat": 14.4663, "target_lon": 75.9233, "reason": "Geometric offset alignment"},
+        },
     ]
     proposals = generate_signal_placement_proposals(issues, telemetry={})
-    assert len(proposals) == 2
+    assert len(proposals) == 3
     types = [p["type"] for p in proposals]
     assert "signal_add" in types
     assert "signal_remove" in types
+    assert "signal_relocate" in types
 
 
 def test_intersection_simulator_analytic():

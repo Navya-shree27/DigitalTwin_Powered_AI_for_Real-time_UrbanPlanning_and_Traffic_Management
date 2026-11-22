@@ -166,11 +166,34 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         from ai.issue_detection.lane_utilization_analyzer import detect_lane_issues
         from ai.issue_detection.signal_placement_analyzer import detect_signal_placement_issues
 
+        # Load existing signals to distinguish signalized vs unsignalized intersections
+        scenario_dir = ROOT / "data" / "scenarios" / str(scenario_id)
+        signals_path = scenario_dir / "city_signals.geojson"
+        if not signals_path.exists():
+            signals_path = ROOT / "data" / "city_signals.geojson"
+        existing_signal_osmids = set()
+        if signals_path.exists():
+            try:
+                with open(signals_path, "r", encoding="utf-8") as sf:
+                    sigs_data = json.load(sf)
+                    for feat in sigs_data.get("features", []):
+                        osmid = feat.get("properties", {}).get("osmid")
+                        if osmid:
+                            existing_signal_osmids.add(str(osmid))
+            except Exception as se_err:
+                log.warning(f"Could not load city_signals.geojson: {se_err}")
+
+        sig_placement_issues = detect_signal_placement_issues(telemetry, existing_signal_osmids=existing_signal_osmids)
+        safety_issues = detect_unsafe_intersections(telemetry)
+        congestion_issues = detect_congestion(telemetry)
+        lane_issues = detect_lane_issues(telemetry)
+
+        # Put high-value infrastructure issues first so they are never truncated by the DB cap
         all_issues = (
-            detect_congestion(telemetry) +
-            detect_unsafe_intersections(telemetry) +
-            detect_lane_issues(telemetry) +
-            detect_signal_placement_issues(telemetry)
+            sig_placement_issues +
+            safety_issues[:60] +
+            congestion_issues[:70] +
+            lane_issues[:50]
         )
 
         # ── Fast DB Commit: Save baseline run telemetry ───────────────────────
@@ -220,11 +243,17 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
         from ai.proposal_generator.signal_placement_proposer import generate_signal_placement_proposals
 
+        sig_placement_props = generate_signal_placement_proposals(all_issues, telemetry)
+        timing_props        = generate_signal_proposals(all_issues, telemetry)
+        lane_props          = generate_lane_proposals(all_issues, telemetry)
+        diversion_props     = generate_diversion_proposals(all_issues, telemetry)
+
+        # Ensure infrastructure placement proposals (add, remove, relocate) are prioritized first
         all_proposals = (
-            generate_signal_proposals(all_issues, telemetry) +
-            generate_lane_proposals(all_issues, telemetry) +
-            generate_diversion_proposals(all_issues, telemetry) +
-            generate_signal_placement_proposals(all_issues, telemetry)
+            sig_placement_props +
+            timing_props +
+            lane_props +
+            diversion_props
         )
 
         # ── Zoning analysis (runs after main proposals; non-blocking) ─────────

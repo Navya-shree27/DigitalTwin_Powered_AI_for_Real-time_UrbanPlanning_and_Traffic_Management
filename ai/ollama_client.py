@@ -71,11 +71,11 @@ class OllamaClient:
         self,
         host: str | None = None,
         timeout: int | None = None,
-        max_retries: int = 2,
-        retry_delay: float = 1.5,
+        max_retries: int = 1,
+        retry_delay: float = 1.0,
     ):
         self.host = (host or os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
-        self.timeout = int(timeout or os.getenv("OLLAMA_TIMEOUT", "120"))
+        self.timeout = int(timeout or os.getenv("OLLAMA_TIMEOUT", "45"))
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self._available: bool | None = None  # cached availability

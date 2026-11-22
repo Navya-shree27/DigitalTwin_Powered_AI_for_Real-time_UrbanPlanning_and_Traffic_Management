@@ -217,34 +217,20 @@ class ZoningAnalyzer:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _fetch_landuse(self, bbox: tuple[float, float, float, float]):
-        """Download landuse GeoDataFrame. Returns None on any error."""
-        try:
-            import osmnx as ox
-        except ImportError:
-            log.warning("OSMnx not installed — zoning analysis unavailable.")
-            return None
+        """Download or load cached landuse GeoDataFrame. Returns None on any error."""
+        cache_path = ROOT / "data" / "cache" / "landuse.geojson"
+        if cache_path.exists():
+            try:
+                import geopandas as gpd
+                gdf = gpd.read_file(cache_path)
+                if not gdf.empty:
+                    return gdf
+            except Exception as ce:
+                log.debug(f"Could not read cached landuse: {ce}")
 
-        try:
-            north, south, east, west = bbox
-            gdf = ox.features_from_bbox(
-                bbox=(north, south, east, west),
-                tags={"landuse": True},
-            )
-            # Filter to relevant polygon features only
-            gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
-            gdf["landuse"] = gdf.get("landuse", "").fillna("").astype(str)
-            gdf = gdf[gdf["landuse"].isin(RELEVANT_USES)]
-            # Project to local UTM so we can compute area in m²
-            gdf = gdf.to_crs(gdf.estimate_utm_crs())
-            gdf["area_m2"] = gdf.geometry.area
-            # Back to WGS84 for centroids
-            gdf_wgs = gdf.to_crs(epsg=4326)
-            gdf["centroid_lat"] = gdf_wgs.geometry.centroid.y
-            gdf["centroid_lon"] = gdf_wgs.geometry.centroid.x
-            return gdf
-        except Exception as exc:
-            log.warning(f"ZoningAnalyzer._fetch_landuse error: {exc}")
-            return None
+        # Avoid executing massive multi-thousand sub-query Overpass requests in real-time simulation
+        log.debug("Live Overpass landuse query skipped to maintain instant simulation response.")
+        return None
 
     def _detect_zones(self, gdf, scenario_id: int) -> list[dict]:
         """

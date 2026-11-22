@@ -70,31 +70,13 @@ def _enrich_with_llm(
     current_wait: float,
     expected_wait_reduction_pct: int,
 ) -> str:
-    """
-    Call Ollama to generate an AI rationale for the signal timing proposal.
-    Returns an empty string on failure (graceful degradation).
-    """
-    try:
-        from ai.ollama_client import get_ollama_client
-        client = get_ollama_client()
-        if not client.is_available():
-            return ""
-
-        flows = [f"{round(f)} veh/h" for f, c in approaches[:n_phases]]
-        prompt = (
-            f"Traffic signal retiming proposal for node {node_id} ({sc}-approach intersection).\n"
-            f"Webster-optimal cycle: {round(C_opt)}s, {n_phases} phases.\n"
-            f"Critical flow ratio Y={Y:.2f}, current average wait={current_wait:.1f}s.\n"
-            f"Incoming approach flows: {', '.join(flows)}.\n"
-            f"Expected wait reduction: ~{expected_wait_reduction_pct}%.\n\n"
-            f"In 2-3 concise sentences, explain WHY this retiming will improve traffic flow "
-            f"at this intersection for a city planner audience. Focus on the engineering reasoning "
-            f"(over-saturation, phase imbalance, Webster optimality). No bullet points."
-        )
-        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=150)
-    except Exception as e:
-        log.debug(f"LLM enrichment skipped for node {node_id}: {e}")
-        return ""
+    """Generate an authoritative engineering rationale for the signal timing proposal."""
+    flows = [f"{round(f)} veh/h" for f, c in approaches[:n_phases]]
+    flow_str = f" on approaches ({', '.join(flows)})" if flows else ""
+    return (
+        f"Webster-optimal cycle {round(C_opt)}s across {n_phases} phases resolves "
+        f"critical flow saturation (Y={Y:.2f}){flow_str}, yielding ~{expected_wait_reduction_pct}% delay reduction."
+    )
 
 
 class SignalTimingOptimizer:
@@ -138,8 +120,11 @@ class SignalTimingOptimizer:
 
         proposals = []
         counter   = 0
+        seen_nodes: set[int] = set()
 
         for issue in issues:
+            if len(proposals) >= 20:
+                break
             itype = issue.get("type", "")
             if itype not in ("congestion", "intersection_safety"):
                 continue
@@ -150,8 +135,9 @@ class SignalTimingOptimizer:
             if node_id is None:
                 # congestion issue — use the destination node of the edge
                 node_id = loc.get("node_v")
-            if node_id is None:
+            if node_id is None or node_id in seen_nodes:
                 continue
+            seen_nodes.add(node_id)
 
             node_data = node_lookup.get(node_id, {})
             lat = node_data.get("lat", 0)

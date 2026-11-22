@@ -95,6 +95,30 @@
         "congestion_ratio": 0.0006,
         "severe_issues": 3
       }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 9,
+      "timestamp": "2026-11-22T11:55:24.008114+00:00",
+      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and no wait times, indicating efficient traffic flow. However, a closer examination reveals 5 congested edges, suggesting potential bottlenecks that require\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 18.5,
+        "avg_travel_time_s": 18.66,
+        "congestion_ratio": 0.8634,
+        "severe_issues": 11989
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 10,
+      "timestamp": "2026-11-22T12:00:07.511419+00:00",
+      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 18.5 km/h and average travel times of 18.7s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected,\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 18.5,
+        "avg_travel_time_s": 18.66,
+        "congestion_ratio": 0.8634,
+        "severe_issues": 133
+      }
     }
   ],
   "2": [

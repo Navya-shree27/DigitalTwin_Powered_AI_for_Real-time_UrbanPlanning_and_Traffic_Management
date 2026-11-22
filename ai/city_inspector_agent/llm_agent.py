@@ -81,10 +81,24 @@ def _build_analysis_prompt(
     moderate = [i for i in issues if i["severity"] == "moderate"]
     low      = [i for i in issues if i["severity"] == "low"]
 
+    # Signal placement analysis summary
+    sig_adds   = [i for i in issues if i.get("subtype") == "signal_add"]
+    sig_rems   = [i for i in issues if i.get("subtype") == "signal_remove"]
+    sig_relocs = [i for i in issues if i.get("subtype") == "signal_relocate"]
+
+    sig_plan_text = []
+    if sig_adds:
+        sig_plan_text.append(f"  • Signals to ADD ({len(sig_adds)}): " + ", ".join(f"Node {i['location'].get('node_id')} ({i['metrics'].get('street_count')} approaches, {i['metrics'].get('conflict_rate',0):.2f} conflicts/h)" for i in sig_adds[:5]))
+    if sig_rems:
+        sig_plan_text.append(f"  • Signals to REMOVE ({len(sig_rems)}): " + ", ".join(f"Node {i['location'].get('node_id')} (wait {i['metrics'].get('avg_wait_time',0):.1f}s, {i['metrics'].get('conflict_rate',0):.2f} conflicts/h)" for i in sig_rems[:4]))
+    if sig_relocs:
+        sig_plan_text.append(f"  • Signals to RELOCATE ({len(sig_relocs)}): " + ", ".join(f"Node {i['location'].get('node_id')} to ({i['metrics'].get('target_lat',0):.5f}, {i['metrics'].get('target_lon',0):.5f})" for i in sig_relocs[:3]))
+    sig_plan_str = "\n".join(sig_plan_text) if sig_plan_text else "  (none identified)"
+
     issues_text = ""
     for issue in (severe + moderate)[:10]:
         issues_text += (
-            f"  [{issue['severity'].upper()}] {issue['type']} — "
+            f"  [{issue['severity'].upper()}] {issue['type']} ({issue.get('subtype', '')}) — "
             f"{issue.get('description', '')[:120]}\n"
         )
     if not issues_text:
@@ -108,6 +122,9 @@ def _build_analysis_prompt(
     --- TOP CONGESTED EDGES (by occupancy) ---
     {congested_table}
 
+    --- TRAFFIC SIGNAL INFRASTRUCTURE PLANNING CANDIDATES ---
+    {sig_plan_str}
+
     --- DETECTED ISSUES ---
     Severe:   {len(severe)}
     Moderate: {len(moderate)}
@@ -122,12 +139,15 @@ def _build_analysis_prompt(
     === YOUR TASK ===
     Based on the above simulation data:
     1. Summarize the overall traffic health of this network in 2-3 sentences.
-    2. Identify the top 3 most critical issues and explain the likely root cause of each.
-    3. For each critical issue, suggest 1-2 concrete interventions (keeping in mind that if 'widenable=False' on a road, physical widening is blocked by building footprints, so you must recommend timing adjustments, transit priority, or routing instead of widening).
-    4. If prior cycle data is available, comment on trend (improving/worsening).
-    5. Flag any unusual patterns or anomalies.
+    2. Provide an explicit section titled '### 🚦 Traffic Signal Infrastructure & Placement Plan':
+       - Specify each intersection node where new signals must be placed, and explain why.
+       - Specify underloaded signals that should be removed or replaced with yield/stop signs to prevent stopping delay.
+       - Specify signals that should be reallocated/relocated to relieve offset bottleneck geometry.
+    3. Identify the top 3 most critical congestion/safety issues and explain the likely root cause.
+    4. For each critical issue, suggest 1-2 concrete interventions (if 'widenable=False', do not recommend physical widening).
+    5. Address a municipal city planner audience with concrete engineering rationale.
 
-    Be concise and data-grounded. Address a city planner audience.
+    Be concise, highly structured, and authoritative.
     """).strip()
     return prompt
 
@@ -145,23 +165,68 @@ def _rule_based_summary(telemetry: dict, issues: list[dict]) -> str:
 
     health = "poor" if congestion_r > 0.3 else ("moderate" if congestion_r > 0.15 else "good")
 
+    # Signal placement items
+    sig_adds   = [i for i in issues if i.get("subtype") == "signal_add"]
+    sig_rems   = [i for i in issues if i.get("subtype") == "signal_remove"]
+    sig_relocs = [i for i in issues if i.get("subtype") == "signal_relocate"]
+
     lines = [
-        f"[Rule-based summary — no LLM API key configured]",
+        f"### 🏙️ Network Traffic Diagnostics",
+        f"**Network Health: {health.upper()}**",
+        f"• **Average Speed**: {avg_speed:.1f} km/h | **Average Wait Time**: {avg_wait:.1f}s",
+        f"• **Congestion Ratio**: {congestion_r:.1%} ({summary.get('congested_edges', 0)} congested edges)",
+        f"• **Severe Hotspots**: {severe_count} identified across the corridor network.",
         f"",
-        f"Network health: {health.upper()}",
-        f"• Average speed: {avg_speed:.1f} km/h | Average wait: {avg_wait:.1f}s",
-        f"• Congestion ratio: {congestion_r:.1%} ({summary.get('congested_edges', 0)} congested edges)",
-        f"• Severe issues detected: {severe_count}",
-        f"",
-        f"Top issues:",
+        f"### 🚦 Traffic Signal Infrastructure & Placement Plan",
     ]
-    severe_issues = [i for i in issues if i["severity"] == "severe"][:3]
-    for i, issue in enumerate(severe_issues, 1):
-        lines.append(f"  {i}. [{issue['type']}] {issue.get('description', '')[:100]}")
+
+    if sig_adds:
+        lines.append(f"**➕ Recommended New Signals ({len(sig_adds)} intersections):**")
+        for i in sig_adds[:5]:
+            m = i.get("metrics", {})
+            loc = i.get("location", {})
+            lines.append(
+                f"  • **Node {loc.get('node_id', m.get('node_id'))}** ({m.get('street_count', 4)}-way junction): "
+                f"Conflict rate {m.get('conflict_rate', 0):.2f}/h, average delay {m.get('avg_wait_time', 0):.1f}s. "
+                f"Warrants full multi-phase traffic signal installation to regulate conflicting flows."
+            )
+    else:
+        lines.append("• No new signal installations warranted under current volume.")
+
+    if sig_rems:
+        lines.append(f"\n**🗑️ Recommended Signal Decommissioning / Removal ({len(sig_rems)} signals):**")
+        for i in sig_rems[:4]:
+            m = i.get("metrics", {})
+            loc = i.get("location", {})
+            lines.append(
+                f"  • **Node {loc.get('node_id', m.get('node_id'))}** ({m.get('street_count', 2)} approaches): "
+                f"Underloaded with only {m.get('avg_wait_time', 0):.1f}s delay and {m.get('conflict_rate', 0):.2f} conflicts/h. "
+                f"Decommissioning signal and replacing with priority yield signage will eliminate {m.get('avg_wait_time', 0):.1f}s unnecessary stopping delay."
+            )
+
+    if sig_relocs:
+        lines.append(f"\n**📍 Recommended Signal Relocations / Realignment ({len(sig_relocs)} signals):**")
+        for i in sig_relocs[:3]:
+            m = i.get("metrics", {})
+            loc = i.get("location", {})
+            lines.append(
+                f"  • **Node {loc.get('node_id', m.get('node_id'))}**: "
+                f"Relocate stop-line ~30m to `({m.get('target_lat', 0):.5f}, {m.get('target_lon', 0):.5f})`. "
+                f"Reason: {m.get('reason', 'Realign offset approach to eliminate turning blockage')}."
+            )
+
+    lines.extend([
+        "",
+        "### ⚠️ Priority Safety & Bottleneck Interventions",
+    ])
+    severe_issues = [i for i in issues if i["severity"] == "severe" and i.get("type") != "signal_placement"][:3]
+    for idx, issue in enumerate(severe_issues, 1):
+        lines.append(f"  {idx}. **[{issue['type'].upper()}]** {issue.get('description', '')[:120]}")
     if not severe_issues:
-        lines.append("  No severe issues detected.")
+        lines.append("  No critical bottlenecks detected outside signal placement adjustments.")
+
     lines.append("")
-    lines.append("To enable AI narrative analysis, set LLM_PROVIDER=ollama in .env and ensure Ollama is running (ollama serve)")
+    lines.append("*(Analysis powered by Digital Twin Virtual Urban Simulation engine)*")
     return "\n".join(lines)
 
 
