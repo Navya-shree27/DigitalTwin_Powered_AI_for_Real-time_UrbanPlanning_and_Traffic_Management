@@ -285,9 +285,30 @@ class SyntheticSimulator:
             in_flows = node_flows.get(node_id, [0])
             avg_flow = np.mean(in_flows)
 
+            is_signal = data.get("highway") == "traffic_signals"
+
+            # Physics of collision and conflict:
+            # Unsignalized junctions with >= 3 approaches lack phase separation,
+            # producing severe crossing conflicts, critical-gap acceptance failures,
+            # and higher collision risk as traffic volume grows.
+            if is_signal:
+                # Phased signals regulate conflicting crossing flows
+                conflict_mult = 0.40
+                base_conflict = (avg_flow * sc) / 4500.0
+            else:
+                # Uncontrolled / priority crossings have crossing conflict points
+                conflict_mult = 1.35 if sc >= 3 else 0.50
+                base_conflict = (avg_flow * sc) / 2200.0
+
             conflict_rate = float(np.clip(
-                avg_flow * sc / 3000 + np.random.exponential(0.05), 0, 5
+                (base_conflict * conflict_mult) + np.random.exponential(0.05), 0, 5
             ))
+
+            # Collision risk index (0.0 to 1.0) based on crossing speed, approach flow, and signal protection
+            if is_signal:
+                collision_risk = float(np.clip(0.05 + (avg_flow / 2500.0) * 0.20, 0.05, 0.70))
+            else:
+                collision_risk = float(np.clip(0.12 + (conflict_rate / 3.0) * 0.55, 0.10, 0.98))
 
             # Calculate wait modifier based on applied signal timing proposals
             wait_modifier = 1.0
@@ -311,16 +332,18 @@ class SyntheticSimulator:
                         break
 
             records.append({
-                "node_id":      int(node_id),
-                "lat":          round(lat, 6),
-                "lon":          round(lon, 6),
-                "street_count": sc,
-                "conflict_rate": round(conflict_rate, 3),
-                "avg_wait_time": round(avg_wait, 2),
-                "highway":       data.get("highway"),
-                "designation":   data.get("designation"),
-                "has_sidewalk":  has_sidewalk,
-                "has_dustbin":   data.get("has_dustbin", False),
+                "node_id":              int(node_id),
+                "lat":                  round(lat, 6),
+                "lon":                  round(lon, 6),
+                "street_count":         sc,
+                "is_signal":            is_signal,
+                "conflict_rate":        round(conflict_rate, 3),
+                "collision_risk_score": round(collision_risk, 3),
+                "avg_wait_time":        round(avg_wait, 2),
+                "highway":              data.get("highway"),
+                "designation":          data.get("designation"),
+                "has_sidewalk":         has_sidewalk,
+                "has_dustbin":          data.get("has_dustbin", False),
             })
         return records
 

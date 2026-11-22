@@ -36,21 +36,55 @@ def simulate_intersection(
     duration_s: int = 300,
     lat: float = 0.0,
     lon: float = 0.0,
+    is_signal: bool = True,
+    street_count: int = 4,
 ) -> dict[str, Any]:
     """
     Run a micro-simulation for a single intersection and return metrics.
-    Falls back to analytic (Webster) model if SUMO is unavailable.
+    Supports both signalized and unsignalized (priority/uncontrolled) junctions.
+    Falls back to analytic model if SUMO is unavailable.
     """
-    if _sumo_available():
+    from simulation.capacity_breakdown_analyzer import find_failing_point
+
+    if is_signal and _sumo_available():
         try:
-            return _run_sumo_sim(node_id, vehicle_mix, green_s, amber_s, red_s, duration_s)
+            res = _run_sumo_sim(node_id, vehicle_mix, green_s, amber_s, red_s, duration_s)
+            res["failing_point"] = find_failing_point(
+                node_id=node_id,
+                is_signal=True,
+                street_count=street_count,
+                green_s=green_s,
+                amber_s=amber_s,
+                red_s=red_s,
+                duration_s=duration_s,
+            )
+            return res
         except Exception as e:
             log.warning(f"SUMO sim failed ({e}), falling back to analytic model")
 
-    return _analytic_model(node_id, vehicle_mix, green_s, amber_s, red_s, duration_s)
+    res = _analytic_model(
+        node_id=node_id,
+        vehicle_mix=vehicle_mix,
+        green_s=green_s,
+        amber_s=amber_s,
+        red_s=red_s,
+        duration_s=duration_s,
+        is_signal=is_signal,
+        street_count=street_count,
+    )
+    res["failing_point"] = find_failing_point(
+        node_id=node_id,
+        is_signal=is_signal,
+        street_count=street_count,
+        green_s=green_s,
+        amber_s=amber_s,
+        red_s=red_s,
+        duration_s=duration_s,
+    )
+    return res
 
 
-# ── Analytic (Webster) fallback ───────────────────────────────────────────────
+# ── Analytic model (Signalized Webster & Unsignalized Priority Gap Acceptance) ─
 
 def _analytic_model(
     node_id: str | int,
@@ -59,10 +93,11 @@ def _analytic_model(
     amber_s: int,
     red_s: int,
     duration_s: int,
+    is_signal: bool = True,
+    street_count: int = 4,
 ) -> dict[str, Any]:
     """
-    Fast Webster-formula analytic model, no SUMO needed.
-    Models a simple 2-approach signalised intersection.
+    Analytic model for both signalized (Webster) and unsignalized (HCM Gap Acceptance) intersections.
     """
     cars   = vehicle_mix.get("cars", 0)
     bikes  = vehicle_mix.get("bikes", 0)
@@ -74,43 +109,55 @@ def _analytic_model(
     total_pce = cars + (bikes * 0.5) + (autos * 0.75) + (trucks * 2.0) + (buses * 2.5)
     total_veh = cars + bikes + autos + trucks + buses
 
-    cycle_s = green_s + amber_s + red_s
+    approaches = max(2, min(street_count, 6))
 
-    # Saturation flow per lane (pcu/hr standard: 1800)
-    sat_flow = 1800
-    # Approach flow in pcu/hr (assume 2 approaches sharing vehicles)
-    flow_per_approach = (total_pce / max(duration_s / 3600.0, 1)) / 2.0
-    capacity_per_approach = sat_flow * (green_s / cycle_s)
+    if is_signal:
+        cycle_s = green_s + amber_s + red_s
+        sat_flow = 1800.0
+        flow_per_approach = (total_pce / max(duration_s / 3600.0, 1)) / max(approaches / 2.0, 1.0)
+        capacity_per_approach = sat_flow * (green_s / cycle_s)
 
-    # Degree of saturation
-    x = flow_per_approach / max(capacity_per_approach, 1.0)
-    x = min(x, 0.99)
+        x = flow_per_approach / max(capacity_per_approach, 1.0)
+        x = min(x, 0.99)
 
-    # Webster's delay formula: d = 0.5*C*(1 - g/C)^2 / (1 - x*g/C) + x^2 / (2*q*(1-x))
-    g_over_c = green_s / cycle_s
-    q_pcu_per_s = flow_per_approach / 3600.0
-    if q_pcu_per_s < 0.0001:
-        q_pcu_per_s = 0.0001
+        g_over_c = green_s / cycle_s
+        q_pcu_per_s = max(flow_per_approach / 3600.0, 0.0001)
 
-    d1 = 0.5 * cycle_s * (1 - g_over_c) ** 2 / max(1 - x * g_over_c, 0.01)
-    d2 = x ** 2 / (2 * q_pcu_per_s * max(1 - x, 0.01))
-    delay_s = round(d1 + d2, 2)
+        d1 = 0.5 * cycle_s * (1 - g_over_c) ** 2 / max(1 - x * g_over_c, 0.01)
+        d2 = x ** 2 / (2 * q_pcu_per_s * max(1 - x, 0.01))
+        delay_s = round(d1 + d2, 2)
+        throughput_pce = int(min(total_pce, capacity_per_approach * (approaches / 2.0) * (duration_s / 3600.0)))
+        avg_queue = round(q_pcu_per_s * delay_s, 1)
+        green_util = round(min(x * 100, 100), 1)
+        collision_prob = round(min(0.05 + 0.15 * x, 0.95), 3)
+        interpretation = _interpret(delay_s, x, green_util, is_signal=True)
+    else:
+        # Unsignalized junction
+        cycle_s = 0
+        hourly_flow = total_pce / max(duration_s / 3600.0, 1)
+        major_flow = hourly_flow * 0.65
+        minor_flow = hourly_flow * 0.35 / max(approaches - 2, 1)
 
-    # Throughput: how many PCE pass per hour given capacity
-    throughput_pce = int(min(total_pce, capacity_per_approach * 2 * (duration_s / 3600.0)))
+        # Gap acceptance capacity
+        q_maj_s = (major_flow / 2.0) / 3600.0
+        cap_minor = max((major_flow / 2.0) * (math.exp(-q_maj_s * 5.0) / max(1.0 - math.exp(-q_maj_s * 3.0), 0.05)), 60.0)
 
-    # Queue: average queue length in PCE
-    avg_queue = round(q_pcu_per_s * delay_s, 1)
+        x = min(minor_flow / cap_minor, 1.5)
+        delay_s = round((3600.0 / cap_minor) + (x / max(1.0 - min(x, 0.95), 0.05)) * 4.0, 2)
+        avg_queue = round((minor_flow / 3600.0) * delay_s, 1)
+        throughput_pce = int(min(total_pce, (major_flow + cap_minor) * (duration_s / 3600.0)))
+        green_util = 0.0
+        conflict_index = (major_flow * minor_flow) / 150000.0
+        collision_prob = round(min(0.15 + conflict_index * 0.35, 0.98), 3)
+        interpretation = _interpret(delay_s, x, green_util, is_signal=False, conflict_index=conflict_index)
 
-    # Green utilization: how efficiently the green phase is used
-    green_util = round(min(x * 100, 100), 1)
-
-    # Emissions proxy (gCO2/pce/km approx)
     emissions = round(total_pce * delay_s * 0.03, 2)
 
     return {
         "node_id": str(node_id),
-        "engine": "analytic_webster",
+        "is_signal": is_signal,
+        "street_count": approaches,
+        "engine": "analytic_webster" if is_signal else "analytic_unsignalized_gap_acceptance",
         "vehicle_mix": vehicle_mix,
         "total_vehicles": total_veh,
         "total_pce": round(total_pce, 1),
@@ -119,7 +166,7 @@ def _analytic_model(
             "amber_s": amber_s,
             "red_s": red_s,
             "cycle_s": cycle_s,
-        },
+        } if is_signal else None,
         "metrics": {
             "avg_wait_time_s":     delay_s,
             "avg_queue_length":    avg_queue,
@@ -127,22 +174,28 @@ def _analytic_model(
             "green_utilization_pct": green_util,
             "degree_of_saturation": round(x, 3),
             "emissions_proxy":      emissions,
-            "capacity_pce_hr":      round(capacity_per_approach * 2, 1),
-            "flow_pce_hr":          round(flow_per_approach * 2, 1),
+            "collision_risk_score": collision_prob,
         },
-        "interpretation": _interpret(delay_s, x, green_util),
+        "interpretation": interpretation,
     }
 
 
-def _interpret(delay_s: float, x: float, green_util: float) -> str:
+def _interpret(delay_s: float, x: float, green_util: float, is_signal: bool = True, conflict_index: float = 0.0) -> str:
+    if not is_signal:
+        if conflict_index > 2.0 or delay_s > 45.0:
+            return "HAZARDOUS: High crossing conflict and collision risk without signal protection. Installing a traffic signal is strongly warranted."
+        if x > 0.8:
+            return "WARNING: Minor street vehicles experiencing severe delay waiting for gaps in major flow."
+        return "ACCEPTABLE: Unsignalized priority junction handling current traffic volume with adequate gap acceptance."
+
     if x > 0.9:
-        return "CRITICAL: Intersection is over-saturated. Increase capacity or redistribute traffic."
+        return "CRITICAL: Intersection is over-saturated. Increase green capacity or redistribute traffic."
     if x > 0.75:
         return "WARNING: High saturation. Consider extending green phase or adding a lane."
     if delay_s > 60:
         return "HIGH DELAY: Average wait exceeds 1 minute. Signal timing needs optimization."
     if green_util < 40:
-        return "UNDERLOADED: Green phase is barely used. Signal may be removable."
+        return "UNDERLOADED: Green phase is barely used. Signal may be removable or replaced with yield control."
     return "ACCEPTABLE: Intersection operating within normal parameters."
 
 

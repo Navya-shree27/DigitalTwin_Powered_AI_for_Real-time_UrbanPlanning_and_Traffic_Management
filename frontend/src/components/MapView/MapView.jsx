@@ -1078,7 +1078,7 @@ export default function MapView({
 
             {!selectedNode ? (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center', padding: '10px 0', lineHeight: 1.6 }}>
-                Click a <span style={{ color: '#ef4444', fontWeight: 700 }}>red signal marker</span> on the map to begin intersection simulation.
+                Click any <span style={{ color: '#ef4444', fontWeight: 700 }}>signal (red)</span> or <span style={{ color: '#22c55e', fontWeight: 700 }}>intersection (green)</span> on the map to begin micro-simulation & failure analysis.
               </div>
             ) : (
               <>

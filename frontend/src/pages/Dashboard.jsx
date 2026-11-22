@@ -2184,6 +2184,14 @@ function round(val, dec) {
 // ── IntersectionSimModal ──────────────────────────────────────────────────────
 
 function IntersectionSimModal({ scenarioId, node, onClose }) {
+  const defaultIsSignal = Boolean(
+    node?.properties?.highway === 'traffic_signals' ||
+    node?.highway === 'traffic_signals' ||
+    node?.is_signal
+  )
+
+  const [isSignal, setIsSignal] = useState(defaultIsSignal)
+  const [activeTab, setActiveTab] = useState('failing_point') // 'failing_point' | 'manual'
   const [vehicleMix, setVehicleMix] = useState({ cars: 50, bikes: 20, autos: 10, trucks: 5, buses: 2 })
   const [greenS, setGreenS] = useState(35)
   const [amberS] = useState(3)
@@ -2191,7 +2199,12 @@ function IntersectionSimModal({ scenarioId, node, onClose }) {
   const [durationS, setDurationS] = useState(300)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const [failingResult, setFailingResult] = useState(null)
+  const [failingLoading, setFailingLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  const streetCount = node?.properties?.street_count || node?.street_count || 4
+  const nodeId = String(node?.id || node?.properties?.osmid || 'unknown')
 
   const handleSimulate = async () => {
     setLoading(true)
@@ -2200,9 +2213,11 @@ function IntersectionSimModal({ scenarioId, node, onClose }) {
     try {
       const { scenariosApi: sApi } = await import('../services/apiClient.js')
       const res = await sApi.simulateIntersection(scenarioId, {
-        node_id: String(node?.id || node?.properties?.osmid || 'unknown'),
+        node_id: nodeId,
         lat: node?.lat || 0,
         lon: node?.lon || 0,
+        is_signal: isSignal,
+        street_count: streetCount,
         green_s: greenS,
         amber_s: amberS,
         red_s: redS,
@@ -2210,12 +2225,41 @@ function IntersectionSimModal({ scenarioId, node, onClose }) {
         vehicle_mix: vehicleMix,
       })
       setResult(res.simulation)
+      if (res.simulation?.failing_point) {
+        setFailingResult(res.simulation.failing_point)
+      }
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
   }
+
+  const handleRunFailingPointTest = async () => {
+    setFailingLoading(true)
+    setError(null)
+    try {
+      const { scenariosApi: sApi } = await import('../services/apiClient.js')
+      const res = await sApi.getJunctionFailingPoint(scenarioId, nodeId, {
+        node_id: nodeId,
+        is_signal: isSignal,
+        street_count: streetCount,
+        green_s: greenS,
+        amber_s: amberS,
+        red_s: redS,
+      })
+      setFailingResult(res.failing_point)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setFailingLoading(false)
+    }
+  }
+
+  // Auto-run failing point analysis on modal open
+  useEffect(() => {
+    handleRunFailingPointTest()
+  }, [nodeId, isSignal, greenS, redS])
 
   const updateMix = (key, val) => setVehicleMix(prev => ({ ...prev, [key]: Number(val) }))
   const totalVeh = Object.values(vehicleMix).reduce((a, b) => a + b, 0)
@@ -2227,116 +2271,294 @@ function IntersectionSimModal({ scenarioId, node, onClose }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div className="modal-box glass-card" onClick={e => e.stopPropagation()} style={{ width: 540, maxHeight: '90vh', overflowY: 'auto', padding: 24, borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+    <div className="modal-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="modal-box glass-card" onClick={e => e.stopPropagation()} style={{ width: 620, maxHeight: '92vh', overflowY: 'auto', padding: 24, borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>🚦 Intersection Simulator</div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              Node {node?.id || node?.properties?.osmid || 'Unknown'} · {node?.properties?.designation || node?.properties?.name || 'Intersection'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 18 }}>{isSignal ? '🚦' : '🟢'}</span>
+              <span style={{ fontSize: 16, fontWeight: 700 }}>
+                {isSignal ? 'Signalized Intersection Micro-Simulation' : 'Unsignalized Junction Collision & Capacity Analysis'}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+              Node {nodeId} · {streetCount}-approach intersection · {node?.properties?.designation || node?.properties?.name || 'Urban Junction'}
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
         </div>
 
-        {/* Vehicle Mix Sliders */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
-            🚗 Vehicle Mix — Total: <strong style={{ color: 'var(--accent-primary)' }}>{totalVeh}</strong>
+        {/* Junction Type Selector */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: '8px 12px', marginBottom: 14, border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            Control Type: <strong style={{ color: isSignal ? '#f87171' : '#4ade80' }}>{isSignal ? 'Signal Controlled' : 'Uncontrolled / Priority Crossing'}</strong>
           </div>
-          {[
-            { key: 'cars', label: '🚗 Cars', max: 200 },
-            { key: 'bikes', label: '🏍️ Bikes/Mopeds', max: 150 },
-            { key: 'autos', label: '🛺 Auto-rickshaws', max: 100 },
-            { key: 'trucks', label: '🚛 Trucks', max: 50 },
-            { key: 'buses', label: '🚌 Buses', max: 30 },
-          ].map(({ key, label, max }) => (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, minWidth: 120, color: 'var(--text-secondary)' }}>{label}</span>
-              <input
-                type="range" min={0} max={max} value={vehicleMix[key]}
-                onChange={e => updateMix(key, e.target.value)}
-                style={{ flex: 1, accentColor: 'var(--accent-primary)' }}
-              />
-              <input
-                type="number" min={0} max={max} value={vehicleMix[key]}
-                onChange={e => updateMix(key, e.target.value)}
-                style={{ width: 50, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 6, padding: '2px 6px', fontSize: 12 }}
-              />
-            </div>
-          ))}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => setIsSignal(true)}
+              style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                background: isSignal ? 'rgba(239,68,68,0.25)' : 'transparent',
+                border: isSignal ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.1)',
+                color: isSignal ? '#fca5a5' : 'var(--text-muted)', fontWeight: 600
+              }}
+            >
+              🚦 Signalized
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSignal(false)}
+              style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                background: !isSignal ? 'rgba(34,197,94,0.25)' : 'transparent',
+                border: !isSignal ? '1px solid #22c55e' : '1px solid rgba(255,255,255,0.1)',
+                color: !isSignal ? '#86efac' : 'var(--text-muted)', fontWeight: 600
+              }}
+            >
+              🟢 Unsignalized
+            </button>
+          </div>
         </div>
 
-        {/* Signal Timing */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>⏱️ Signal Timing</div>
-          <div style={{ display: 'flex', gap: 12 }}>
-            {[
-              { label: '🟢 Green (s)', val: greenS, set: setGreenS, min: 5, max: 120 },
-              { label: '🔴 Red (s)', val: redS, set: setRedS, min: 5, max: 120 },
-            ].map(({ label, val, set, min, max }) => (
-              <div key={label} style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
-                <input
-                  type="number" min={min} max={max} value={val}
-                  onChange={e => set(Number(e.target.value))}
-                  style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
-                />
+        {/* Tab Switcher: Failing Point vs Manual */}
+        <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.12)', marginBottom: 16 }}>
+          <button
+            type="button"
+            onClick={() => setActiveTab('failing_point')}
+            style={{
+              flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              background: 'transparent', border: 'none',
+              borderBottom: activeTab === 'failing_point' ? '2px solid #ef4444' : '2px solid transparent',
+              color: activeTab === 'failing_point' ? '#f87171' : 'var(--text-muted)'
+            }}
+          >
+            ⚡ Capacity Failing Point (Ramp-Up Stress Test)
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('manual')}
+            style={{
+              flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              background: 'transparent', border: 'none',
+              borderBottom: activeTab === 'manual' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              color: activeTab === 'manual' ? 'var(--accent-primary)' : 'var(--text-muted)'
+            }}
+          >
+            🚗 Manual Vehicle Mix & Phase Simulation
+          </button>
+        </div>
+
+        {/* TAB 1: FAILING POINT STRESS TEST */}
+        {activeTab === 'failing_point' && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
+              Simulates progressive vehicle flow ramp-up across all approaches to pinpoint the <strong>exact volume threshold where this junction breaks down</strong> into severe congestion (LOS F / delay &gt; 80s / gridlock).
+            </div>
+
+            {failingLoading && (
+              <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
+                <div className="spinner" style={{ width: 22, height: 22, borderWidth: 2, margin: '0 auto 10px' }}/>
+                Calculating progressive ramp-up breakdown curve…
               </div>
-            ))}
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ Duration (s)</div>
-              <select
-                value={durationS} onChange={e => setDurationS(Number(e.target.value))}
-                style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
-              >
-                {[60, 120, 180, 300, 600].map(v => <option key={v} value={v}>{v}s</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6 }}>
-            Cycle: {greenS + amberS + redS}s · Amber: {amberS}s (fixed)
-          </div>
-        </div>
+            )}
 
-        <button
-          className="btn btn-primary"
-          onClick={handleSimulate}
-          disabled={loading}
-          style={{ width: '100%', justifyContent: 'center', marginBottom: 16 }}
-        >
-          {loading ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }}/> Simulating…</> : '▶ Run Intersection Simulation'}
-        </button>
-
-        {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 12 }}>⚠ {error}</div>}
-
-        {result && (
-          <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 12, padding: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, color: 'var(--accent-primary)' }}>
-              📊 Simulation Results — {result.engine === 'sumo' ? 'SUMO TraCI' : 'Webster Analytic Model'}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 12 }}>
-              {[
-                { label: 'Avg Wait Time', val: `${result.metrics?.avg_wait_time_s?.toFixed(1)}s`, raw: result.metrics?.avg_wait_time_s, good: 20, bad: 60 },
-                { label: 'Queue Length', val: `${result.metrics?.avg_queue_length?.toFixed(1) || '–'} veh`, raw: result.metrics?.avg_queue_length, good: 5, bad: 15 },
-                { label: 'Throughput', val: `${result.metrics?.throughput_veh} veh`, raw: null },
-                { label: 'Green Utilization', val: `${result.metrics?.green_utilization_pct?.toFixed(1)}%`, raw: null },
-                { label: 'Saturation (x)', val: result.metrics?.degree_of_saturation?.toFixed(3), raw: result.metrics?.degree_of_saturation, good: 0.5, bad: 0.85 },
-                { label: 'Emissions Proxy', val: `${result.metrics?.emissions_proxy?.toFixed(1)} gCO₂`, raw: null },
-              ].map(({ label, val, raw, good, bad }) => (
-                <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: raw != null ? metricColor(raw, good, bad) : 'white', marginTop: 2 }}>
-                    {val ?? '–'}
+            {failingResult && !failingLoading && (
+              <div>
+                {/* Hero card: Breakdown Volume */}
+                <div style={{
+                  background: failingResult.current_load_pct >= 85 ? 'rgba(239,68,68,0.15)' : failingResult.current_load_pct >= 65 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)',
+                  border: `1px solid ${failingResult.current_load_pct >= 85 ? 'rgba(239,68,68,0.35)' : failingResult.current_load_pct >= 65 ? 'rgba(245,158,11,0.35)' : 'rgba(34,197,94,0.35)'}`,
+                  borderRadius: 12, padding: 16, marginBottom: 14
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+                        Capacity Breakdown Point (Failing Point)
+                      </div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: 'white', marginTop: 2 }}>
+                        {failingResult.failing_point_veh_h?.toLocaleString()} <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-secondary)' }}>veh/h</span>
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>({failingResult.failing_point_veh_min} veh/min)</span>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Current Saturation</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: failingResult.current_load_pct >= 85 ? '#ef4444' : failingResult.current_load_pct >= 65 ? '#f59e0b' : '#22c55e' }}>
+                        {failingResult.current_load_pct}%
+                      </div>
+                    </div>
                   </div>
+
+                  <div style={{ display: 'flex', gap: 12, marginTop: 12, fontSize: 11, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 10 }}>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)' }}>Failure Mode: </span>
+                      <strong style={{ color: '#f87171' }}>{failingResult.failure_mode}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)' }}>Reserve Headroom: </span>
+                      <strong style={{ color: '#86efac' }}>+{failingResult.reserve_capacity_veh_h} veh/h</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progressive Ramp-Up Progression Table */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                    📈 Progressive Demand Ramp-Up &amp; LOS Degradation
+                  </div>
+                  <div style={{ maxHeight: 160, overflowY: 'auto', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '6px 8px' }}>Flow (veh/h)</th>
+                          <th style={{ padding: '6px 8px' }}>Delay</th>
+                          <th style={{ padding: '6px 8px' }}>Queue</th>
+                          <th style={{ padding: '6px 8px' }}>LOS</th>
+                          <th style={{ padding: '6px 8px' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(failingResult.breakdown_curve || []).map((pt, idx) => (
+                          <tr key={idx} style={{
+                            borderBottom: '1px solid rgba(255,255,255,0.04)',
+                            background: pt.status === 'FAILING' ? 'rgba(239,68,68,0.08)' : 'transparent'
+                          }}>
+                            <td style={{ padding: '5px 8px', fontWeight: 600 }}>{pt.volume_veh_h}</td>
+                            <td style={{ padding: '5px 8px', color: pt.delay_s > 60 ? '#f87171' : 'white' }}>{pt.delay_s}s</td>
+                            <td style={{ padding: '5px 8px' }}>{pt.queue_veh} veh</td>
+                            <td style={{ padding: '5px 8px', fontWeight: 700, color: pt.los === 'F' ? '#ef4444' : pt.los === 'E' ? '#f59e0b' : '#22c55e' }}>{pt.los}</td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <span style={{
+                                fontSize: 9, padding: '2px 5px', borderRadius: 4, fontWeight: 700,
+                                background: pt.status === 'FAILING' ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.15)',
+                                color: pt.status === 'FAILING' ? '#fca5a5' : '#86efac'
+                              }}>
+                                {pt.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Mitigation Recommendation */}
+                {failingResult.recommendation && (
+                  <div style={{ fontSize: 11, padding: '10px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#fca5a5', lineHeight: 1.5 }}>
+                    🛠️ <strong>City Engineering Intervention:</strong> {failingResult.recommendation}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: MANUAL SIMULATION */}
+        {activeTab === 'manual' && (
+          <div>
+            {/* Vehicle Mix Sliders */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
+                🚗 Vehicle Mix — Total: <strong style={{ color: 'var(--accent-primary)' }}>{totalVeh}</strong>
+              </div>
+              {[
+                { key: 'cars', label: '🚗 Cars', max: 250 },
+                { key: 'bikes', label: '🏍️ Bikes/Mopeds', max: 200 },
+                { key: 'autos', label: '🛺 Auto-rickshaws', max: 120 },
+                { key: 'trucks', label: '🚛 Trucks', max: 60 },
+                { key: 'buses', label: '🚌 Buses', max: 40 },
+              ].map(({ key, label, max }) => (
+                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7 }}>
+                  <span style={{ fontSize: 11, minWidth: 120, color: 'var(--text-secondary)' }}>{label}</span>
+                  <input
+                    type="range" min={0} max={max} value={vehicleMix[key]}
+                    onChange={e => updateMix(key, e.target.value)}
+                    style={{ flex: 1, accentColor: 'var(--accent-primary)' }}
+                  />
+                  <input
+                    type="number" min={0} max={max} value={vehicleMix[key]}
+                    onChange={e => updateMix(key, e.target.value)}
+                    style={{ width: 50, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 6, padding: '2px 6px', fontSize: 12 }}
+                  />
                 </div>
               ))}
             </div>
 
-            {result.interpretation && (
-              <div style={{ fontSize: 11, padding: '10px 12px', borderRadius: 8, background: 'rgba(10,132,255,0.08)', border: '1px solid rgba(10,132,255,0.2)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                💡 {result.interpretation}
+            {/* Signal Timing (if signalized) */}
+            {isSignal && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>⏱️ Signal Timing Configuration</div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  {[
+                    { label: '🟢 Green (s)', val: greenS, set: setGreenS, min: 5, max: 120 },
+                    { label: '🔴 Red (s)', val: redS, set: setRedS, min: 5, max: 120 },
+                  ].map(({ label, val, set, min, max }) => (
+                    <div key={label} style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+                      <input
+                        type="number" min={min} max={max} value={val}
+                        onChange={e => set(Number(e.target.value))}
+                        style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
+                      />
+                    </div>
+                  ))}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ Duration (s)</div>
+                    <select
+                      value={durationS} onChange={e => setDurationS(Number(e.target.value))}
+                      style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
+                    >
+                      {[60, 120, 180, 300, 600].map(v => <option key={v} value={v}>{v}s</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6 }}>
+                  Cycle: {greenS + amberS + redS}s · Amber: {amberS}s (fixed)
+                </div>
+              </div>
+            )}
+
+            <button
+              className="btn btn-primary"
+              onClick={handleSimulate}
+              disabled={loading}
+              style={{ width: '100%', justifyContent: 'center', marginBottom: 14 }}
+            >
+              {loading ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }}/> Simulating…</> : `▶ Simulate ${isSignal ? 'Signalized Flow' : 'Unsignalized Conflict Flow'}`}
+            </button>
+
+            {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 12 }}>⚠ {error}</div>}
+
+            {result && (
+              <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 12, padding: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, color: 'var(--accent-primary)' }}>
+                  📊 Simulation Results — {result.engine === 'sumo' ? 'SUMO TraCI' : isSignal ? 'Webster Analytic Model' : 'Unsignalized Gap Acceptance Model'}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 12 }}>
+                  {[
+                    { label: 'Avg Wait Time', val: `${result.metrics?.avg_wait_time_s?.toFixed(1)}s`, raw: result.metrics?.avg_wait_time_s, good: 20, bad: 60 },
+                    { label: 'Queue Length', val: `${result.metrics?.avg_queue_length?.toFixed(1) || '–'} veh`, raw: result.metrics?.avg_queue_length, good: 5, bad: 15 },
+                    { label: 'Throughput', val: `${result.metrics?.throughput_veh} veh`, raw: null },
+                    { label: 'Collision Risk', val: result.metrics?.collision_risk_score ? `${(result.metrics.collision_risk_score * 100).toFixed(0)}%` : '–', raw: result.metrics?.collision_risk_score ? result.metrics.collision_risk_score * 100 : null, good: 25, bad: 65 },
+                    { label: 'Saturation (x)', val: result.metrics?.degree_of_saturation?.toFixed(3), raw: result.metrics?.degree_of_saturation, good: 0.5, bad: 0.85 },
+                    { label: 'Emissions Proxy', val: `${result.metrics?.emissions_proxy?.toFixed(1)} gCO₂`, raw: null },
+                  ].map(({ label, val, raw, good, bad }) => (
+                    <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: raw != null ? metricColor(raw, good, bad) : 'white', marginTop: 2 }}>
+                        {val ?? '–'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {result.interpretation && (
+                  <div style={{ fontSize: 11, padding: '10px 12px', borderRadius: 8, background: 'rgba(10,132,255,0.08)', border: '1px solid rgba(10,132,255,0.2)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    💡 {result.interpretation}
+                  </div>
+                )}
               </div>
             )}
           </div>

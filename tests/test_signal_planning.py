@@ -94,3 +94,41 @@ def test_intersection_simulator_analytic():
     assert "throughput_veh" in result["metrics"]
     assert result["total_vehicles"] == 112
     assert result["metrics"]["avg_wait_time_s"] > 0
+    assert "failing_point" in result
+    assert result["failing_point"]["failing_point_veh_h"] > 0
+
+
+def test_unsignalized_intersection_simulation():
+    vehicle_mix = {"cars": 80, "bikes": 40, "autos": 20, "trucks": 10, "buses": 5}
+    result = simulate_intersection(
+        node_id="unsignal_node",
+        vehicle_mix=vehicle_mix,
+        is_signal=False,
+        street_count=4,
+        duration_s=300,
+    )
+    assert result["is_signal"] is False
+    assert result["engine"] == "analytic_unsignalized_gap_acceptance"
+    assert "collision_risk_score" in result["metrics"]
+    assert 0.0 <= result["metrics"]["collision_risk_score"] <= 1.0
+    assert "failing_point" in result
+    assert result["failing_point"]["is_signal"] is False
+
+
+def test_capacity_breakdown_analyzer():
+    from simulation.capacity_breakdown_analyzer import find_failing_point
+
+    # Test signal breakdown
+    fp_sig = find_failing_point(node_id="sig_1", is_signal=True, street_count=4, green_s=30, red_s=40)
+    assert fp_sig["is_signal"] is True
+    assert fp_sig["failing_point_veh_h"] >= 500
+    assert "breakdown_curve" in fp_sig
+    assert len(fp_sig["breakdown_curve"]) > 5
+    assert "failure_mode" in fp_sig
+    assert "recommendation" in fp_sig
+
+    # Test unsignalized breakdown
+    fp_unsig = find_failing_point(node_id="unsig_1", is_signal=False, street_count=4)
+    assert fp_unsig["is_signal"] is False
+    assert fp_unsig["failing_point_veh_h"] > 0
+    assert "breakdown_curve" in fp_unsig

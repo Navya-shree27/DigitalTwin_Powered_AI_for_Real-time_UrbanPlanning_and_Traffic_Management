@@ -80,6 +80,12 @@ export const scenariosApi = {
   signalRelocate: (scenarioId, payload) =>
     api.post(`/scenarios/${scenarioId}/signal-relocate`, payload),
 
+  getFailingPoints: (scenarioId, limit = 50) =>
+    api.get(`/scenarios/${scenarioId}/failing-points?limit=${limit}`),
+
+  getJunctionFailingPoint: (scenarioId, nodeId, payload = {}) =>
+    api.post(`/scenarios/${scenarioId}/signals/${nodeId}/failing-point`, payload),
+
   generateNarrative: (scenarioId) =>
     api.post(`/scenarios/${scenarioId}/generate-narrative`),
 }

@@ -1069,9 +1069,11 @@ def plan_road_service_detour(
 # ── Per-intersection simulation ───────────────────────────────────────────────
 
 class IntersectionSimRequest(BaseModel):
-    node_id: str = Field(..., description="Node/intersection ID to simulate")
+    node_id: str = Field(default="", description="Node/intersection ID to simulate")
     lat: float = Field(default=0.0)
     lon: float = Field(default=0.0)
+    is_signal: bool = Field(default=True, description="True for signalized, False for priority/uncontrolled junction")
+    street_count: int = Field(default=4, ge=2, le=8, description="Number of intersecting approach legs")
     green_s: int = Field(default=35, ge=5, le=120)
     amber_s: int = Field(default=3, ge=2, le=5)
     red_s:   int = Field(default=35, ge=5, le=120)
@@ -1090,7 +1092,8 @@ def simulate_intersection_endpoint(
 ) -> dict:
     """
     Run a per-intersection SUMO/analytic micro-simulation.
-    Returns detailed metrics: wait time, throughput, queue, saturation.
+    Supports both signalized and unsignalized (priority/uncontrolled) junctions.
+    Returns detailed metrics: wait time, throughput, queue, saturation, collision risk, and failing point.
     """
     scenario = db.query(Scenario).get(scenario_id)
     if not scenario:
@@ -1106,8 +1109,66 @@ def simulate_intersection_endpoint(
         duration_s=body.duration_s,
         lat=body.lat,
         lon=body.lon,
+        is_signal=body.is_signal,
+        street_count=body.street_count,
     )
     return {"scenario_id": scenario_id, "simulation": result}
+
+
+@router.get("/{scenario_id}/failing-points")
+def get_citywide_failing_points(
+    scenario_id: int,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Analyze and rank the Capacity Breakdown / Failing Point of all signals
+    and major junctions in the city by progressive flow ramp-up.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from simulation.capacity_breakdown_analyzer import analyze_citywide_failing_points
+
+    run = db.query(SimulationRun).filter(SimulationRun.scenario_id == scenario_id).order_by(SimulationRun.id.desc()).first()
+    telemetry = run.get_telemetry() if run else None
+    result = analyze_citywide_failing_points(scenario_id, telemetry=telemetry, limit=limit)
+    return result
+
+
+@router.post("/{scenario_id}/signals/{node_id}/failing-point")
+def get_junction_failing_point(
+    scenario_id: int,
+    node_id: str,
+    body: IntersectionSimRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Run progressive ramp-up stress testing to determine the exact failure
+    threshold, failure mode, and breakdown curve for a single intersection.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from simulation.capacity_breakdown_analyzer import find_failing_point
+
+    green_s = body.green_s if body else 35
+    amber_s = body.amber_s if body else 3
+    red_s = body.red_s if body else 35
+    is_signal = body.is_signal if body is not None else True
+    street_count = body.street_count if body else 4
+
+    res = find_failing_point(
+        node_id=node_id,
+        is_signal=is_signal,
+        street_count=street_count,
+        green_s=green_s,
+        amber_s=amber_s,
+        red_s=red_s,
+    )
+    return {"scenario_id": scenario_id, "failing_point": res}
 
 
 # ── Signal Relocation Proposal ────────────────────────────────────────────────

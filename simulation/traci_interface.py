@@ -226,10 +226,45 @@ class SUMOTraCIInterface:
                 nodes_list = list(G_proj.nodes())
                 veh_id = 0
                 
+                # Classify nodes by road type to ensure vehicle movement across ALL road classes
+                res_nodes = []
+                art_nodes = []
+                for u, v, k, edata in G_proj.edges(data=True, keys=True):
+                    rtype = str(edata.get("road_type", "")).lower()
+                    if any(t in rtype for t in ["residential", "living_street", "unclassified", "tertiary"]):
+                        res_nodes.extend([u, v])
+                    elif any(t in rtype for t in ["primary", "secondary", "trunk"]):
+                        art_nodes.extend([u, v])
+                
+                res_nodes = list(set(res_nodes)) or nodes_list
+                art_nodes = list(set(art_nodes)) or nodes_list
+
+                # Dynamic demand scaling for traffic-heavy cities
+                traffic_scale = float(os.getenv("TRAFFIC_SCALE", "1.0"))
+                intensity = os.getenv("TRAFFIC_INTENSITY", "normal").lower()
+                if intensity == "heavy":
+                    traffic_scale = max(traffic_scale, 2.5)
+                elif intensity == "congested":
+                    traffic_scale = max(traffic_scale, 4.0)
+
+                target_trips = int(min(max(len(nodes_list) * 0.45 * traffic_scale, 600), 4500))
                 random.seed(self.seed)
-                for _ in range(450):
-                    start_node = random.choice(nodes_list)
-                    end_node = random.choice(nodes_list)
+
+                for _ in range(target_trips):
+                    trip_cat = random.random()
+                    if trip_cat < 0.50:
+                        # Neighborhood commute: Residential -> Arterial corridor
+                        start_node = random.choice(res_nodes)
+                        end_node = random.choice(art_nodes)
+                    elif trip_cat < 0.75:
+                        # Arterial through-traffic: Primary/Secondary -> Primary/Secondary
+                        start_node = random.choice(art_nodes)
+                        end_node = random.choice(art_nodes)
+                    else:
+                        # Local neighborhood circulation: All roads
+                        start_node = random.choice(nodes_list)
+                        end_node = random.choice(nodes_list)
+
                     if start_node == end_node:
                         continue
                     try:
@@ -255,12 +290,13 @@ class SUMOTraCIInterface:
                                 else:
                                     vtype = "bus"
                                     
-                                f.write(f'    <vehicle id="v_{veh_id}" type="{vtype}" route="r_{veh_id}" depart="{random.randint(0, 300)}"/>\n')
+                                depart_time = random.randint(0, min(int(self.duration_s * 0.9), 300))
+                                f.write(f'    <vehicle id="v_{veh_id}" type="{vtype}" route="r_{veh_id}" depart="{depart_time}"/>\n')
                                 veh_id += 1
                     except nx.NetworkXNoPath:
                         continue
                 f.write('</routes>\n')
-            log.info(f"Generated {veh_id} shortest-path routes.")
+            log.info(f"Generated {veh_id} shortest-path routes across all road classes.")
 
         except Exception as e:
             log.error(f"Error compiling SUMO network configurations: {e}")
