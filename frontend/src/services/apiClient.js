@@ -79,6 +79,9 @@ export const scenariosApi = {
 
   signalRelocate: (scenarioId, payload) =>
     api.post(`/scenarios/${scenarioId}/signal-relocate`, payload),
+
+  generateNarrative: (scenarioId) =>
+    api.post(`/scenarios/${scenarioId}/generate-narrative`),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────

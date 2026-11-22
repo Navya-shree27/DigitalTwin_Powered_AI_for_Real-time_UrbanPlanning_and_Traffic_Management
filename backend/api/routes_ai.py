@@ -377,3 +377,49 @@ def get_scenario_ml_predictions(scenario_id: int, db: Session = Depends(get_db))
         "top_hotspots": congested[:25],
     }
 
+
+@router.post("/api/scenarios/{scenario_id}/generate-narrative")
+def generate_scenario_narrative(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    """
+    Generate or refresh the AI City Inspector narrative for the latest run.
+    Uses local Ollama (digital-twin-inspector) with rule-based fallback.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    run = _latest_done_run(scenario_id, db)
+    if not run:
+        raise HTTPException(400, "No completed simulation run found for this scenario.")
+
+    telemetry = run.get_telemetry()
+    if not telemetry:
+        raise HTTPException(400, "Latest run has no telemetry data.")
+
+    issues = [i.to_dict() for i in db.query(Issue).filter(Issue.run_id == run.id).all()]
+
+    from ai.city_inspector_agent.llm_agent import CityInspectorAgent
+    agent = CityInspectorAgent()
+    agent_result = agent.analyze(
+        scenario_id=scenario_id,
+        scenario_name=scenario.name,
+        telemetry=telemetry,
+        issues=issues,
+    )
+
+    narrative = agent_result.get("narrative", "")
+    if narrative:
+        run.agent_narrative = narrative
+        db.add(run)
+        db.commit()
+
+    return {
+        "scenario_id": scenario_id,
+        "run_id": run.id,
+        "narrative": narrative,
+        "model": agent_result.get("model", "unknown"),
+        "top_issues": agent_result.get("top_issues", []),
+        "recommendations": agent_result.get("recommendations", []),
+    }
+
+

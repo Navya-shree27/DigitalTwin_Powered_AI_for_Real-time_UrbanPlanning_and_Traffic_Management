@@ -36,6 +36,7 @@ export default function Dashboard() {
   // Modal state
   const [intersectionSimNode, setIntersectionSimNode] = useState(null)
   const [signalRelocateNode, setSignalRelocateNode] = useState(null)
+  const [narrativeLoading, setNarrativeLoading]   = useState(false)
 
   // Live Timer State
   const [simStartTime, setSimStartTime]           = useState(null)
@@ -249,6 +250,26 @@ export default function Dashboard() {
     }
   }
 
+  // ── On-Demand AI Narrative Generation with Ollama ──────────────────────────
+  const handleGenerateNarrative = async () => {
+    if (!activeScenarioId) return
+    setNarrativeLoading(true)
+    setError(null)
+    try {
+      const res = await scenariosApi.generateNarrative(activeScenarioId)
+      if (res?.narrative) {
+        setDashboardData(prev => ({
+          ...prev,
+          run: { ...prev?.run, agent_narrative: res.narrative }
+        }))
+      }
+    } catch (e) {
+      setError(`Failed to generate AI narrative: ${e.message}`)
+    } finally {
+      setNarrativeLoading(false)
+    }
+  }
+
   // ── UI ────────────────────────────────────────────────────────────────────
   const isReady     = dashboardData?.status === 'ready'
   const hasRun      = !!dashboardData?.run
@@ -447,8 +468,17 @@ export default function Dashboard() {
 
           {isReady && (
             <div className="sidebar-section">
-              <div className="sidebar-section-header">
+              <div className="sidebar-section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span className="sidebar-section-title">🤖 AI City Inspector</span>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 11, padding: '2px 8px', color: 'var(--accent-primary)', height: 'auto' }}
+                  onClick={handleGenerateNarrative}
+                  disabled={narrativeLoading}
+                  title="Run or refresh AI Inspector diagnostic narrative with Ollama"
+                >
+                  {narrativeLoading ? 'Analyzing…' : (agentNarrative ? '🔄 Refresh' : '⚡ Analyze')}
+                </button>
               </div>
               {agentNarrative ? (
                 <div 
@@ -462,15 +492,23 @@ export default function Dashboard() {
                     border: '1px solid rgba(10, 132, 255, 0.15)', 
                     borderRadius: 12,
                     whiteSpace: 'pre-line',
-                    maxHeight: 220,
+                    maxHeight: 240,
                     overflowY: 'auto',
                   }}
                 >
                   {agentNarrative}
                 </div>
               ) : (
-                <div className="glass-card" style={{ padding: 12, borderRadius: 10, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                  AI narrative will appear after the next simulation run (Ollama must be running).
+                <div className="glass-card" style={{ padding: 12, borderRadius: 10, fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div>AI narrative has not been generated for this run yet.</div>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: 11, padding: '6px 12px', justifyContent: 'center' }}
+                    onClick={handleGenerateNarrative}
+                    disabled={narrativeLoading}
+                  >
+                    {narrativeLoading ? '⚡ Analyzing with Ollama…' : '⚡ Generate AI Analysis with Ollama'}
+                  </button>
                 </div>
               )}
               {/* Signal suggestion summary */}
