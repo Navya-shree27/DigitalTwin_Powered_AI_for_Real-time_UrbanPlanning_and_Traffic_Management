@@ -2,18 +2,6 @@
   "1": [
     {
       "scenario_id": 1,
-      "cycle": 3,
-      "timestamp": "2026-07-09T21:42:28.922950+00:00",
-      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: MODERATE\n\u2022 Average speed: 28.2 km/h | Average wait: 2.9s\n\u2022 Congestion ratio: 19.4% (8879 congested edges)\n\u2022 Severe issues detected: 3697\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1690250001_5306415337_0 (primary). Sim\u2026",
-      "key_metrics": {
-        "avg_speed_kph": 28.24,
-        "avg_travel_time_s": 26.56,
-        "congestion_ratio": 0.1937,
-        "severe_issues": 3697
-      }
-    },
-    {
-      "scenario_id": 1,
       "cycle": 4,
       "timestamp": "2026-07-10T09:15:47.441195+00:00",
       "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
@@ -106,6 +94,30 @@
         "avg_travel_time_s": 9.55,
         "congestion_ratio": 0.0006,
         "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 14,
+      "timestamp": "2026-11-22T13:58:54.859310+00:00",
+      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and average travel times of 9.6s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected, \u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.94,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0003,
+        "severe_issues": 2
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 15,
+      "timestamp": "2026-11-22T14:07:17.781327+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics\n**Network Health: GOOD**\n\u2022 **Average Speed**: 27.9 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (2 congested edges)\n\u2022 **Severe Hotspots**: 2 identified across the corridor network.\n\n### \ud83d\udea6 Traffic Signal Infrastructure & Placement Plan\n\u2022 No new si\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.94,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0003,
+        "severe_issues": 2
       }
     }
   ],
