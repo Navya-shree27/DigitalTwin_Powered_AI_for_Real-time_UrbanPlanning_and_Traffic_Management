@@ -131,8 +131,13 @@ class SUMOTraCIInterface:
             import subprocess
             import shutil
             import networkx as nx
-            
-            G_proj = ox.project_graph(self.G)
+            try:
+                if not hasattr(self.G, "graph") or "crs" not in self.G.graph:
+                    self.G.graph["crs"] = "EPSG:4326"
+                G_proj = ox.project_graph(self.G)
+            except Exception as proj_err:
+                log.warning(f"Could not project graph via OSMnx ({proj_err}), using graph nodes directly.")
+                G_proj = self.G
 
             # 1. Write nodes.nod.xml
             nodes_xml_path = sumo_dir / "nodes.nod.xml"
@@ -460,7 +465,6 @@ class SUMOTraCIInterface:
         try:
             if not self.start():
                 log.warning("Could not start SUMO — falling back to synthetic simulator.")
-                _SUMO_LOCK.release()
                 from simulation.simulation_runner import SyntheticSimulator
                 return SyntheticSimulator(self.G, self.duration_s, self.seed).run()
 
@@ -477,7 +481,8 @@ class SUMOTraCIInterface:
             finally:
                 self.stop()
         finally:
-            _SUMO_LOCK.release()
+            if _SUMO_LOCK.locked():
+                _SUMO_LOCK.release()
 
         result["engine"] = "sumo"
         return result

@@ -118,13 +118,18 @@ class CongestionDetector:
 
             speed_ratio = speed_sim / max(speed_ff, 1)
 
-            # Determine severity
+            # Check ML model prediction if available
+            ml_level = edge.get("ml_congestion_level")
+            ml_label = edge.get("ml_congestion_label")
+            ml_risk = edge.get("ml_risk_score", 0.0)
+
+            # Determine severity combining heuristics and ML prediction
             severity = None
-            if speed_ratio < self.speed_ratio_severe or occupancy > self.occupancy_severe:
+            if speed_ratio < self.speed_ratio_severe or occupancy > self.occupancy_severe or (ml_level == 2 and ml_risk >= 0.75):
                 severity = "severe"
-            elif speed_ratio < self.speed_ratio_moderate or occupancy > self.occupancy_moderate:
+            elif speed_ratio < self.speed_ratio_moderate or occupancy > self.occupancy_moderate or (ml_level == 1 and ml_risk >= 0.50):
                 severity = "moderate"
-            elif queue > self.queue_min:
+            elif queue > self.queue_min or (ml_level is not None and ml_level > 0):
                 severity = "low"
 
             if severity is None:
@@ -139,6 +144,8 @@ class CongestionDetector:
                 f"(ratio {speed_ratio:.2f}). Occupancy {occupancy:.1%}. "
                 f"Queue length {queue:.1f} vehicles. Wait time {wait:.1f}s."
             )
+            if ml_label:
+                desc += f" · AI Prediction: {ml_label} (Risk Score: {ml_risk:.0%})"
 
             issues.append(_make_issue(
                 issue_id=issue_id,
@@ -155,6 +162,9 @@ class CongestionDetector:
                     "wait_time_s":    round(wait, 2),
                     "flow_veh_h":     round(flow, 2),
                     "capacity_veh_h": int(capacity),
+                    "ml_prediction":  ml_label,
+                    "ml_risk_score":  ml_risk,
+                    "ml_probabilities": edge.get("ml_congestion_probs"),
                 },
                 description=desc,
             ))

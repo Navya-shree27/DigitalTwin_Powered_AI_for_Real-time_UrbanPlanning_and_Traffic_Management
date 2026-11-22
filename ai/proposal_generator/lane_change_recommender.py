@@ -7,7 +7,10 @@ Proposals generated
 ───────────────────
   • ADD_LANE    : for severely saturated edges where adding a lane is feasible
   • REMOVE_LANE : for underutilized edges where lanes can be reclaimed
-  • REVERSIBLE  : for moderate saturation on bidirectional roads (tidal flow)
+  • REPURPOSE_LANE : for saturated roads where widening is blocked by buildings
+
+Each proposal is enriched with an AI-generated rationale via Ollama (gracefully
+degrades to rule-based description if Ollama is unavailable).
 """
 
 from __future__ import annotations
@@ -18,7 +21,18 @@ from datetime import datetime, timezone
 log = logging.getLogger("lane_change_recommender")
 
 
-def _make_proposal(proposal_id, issue_id, edge_id, u, v, subtype, description, parameters, improvement):
+def _make_proposal(
+    proposal_id: str,
+    issue_id: str,
+    edge_id: str,
+    u: int,
+    v: int,
+    subtype: str,
+    description: str,
+    parameters: dict,
+    improvement: dict,
+    ai_rationale: str = "",
+) -> dict:
     return {
         "proposal_id":          proposal_id,
         "type":                 "lane_change",
@@ -30,11 +44,48 @@ def _make_proposal(proposal_id, issue_id, edge_id, u, v, subtype, description, p
             "node_v":  v,
         },
         "description":          description,
+        "ai_rationale":         ai_rationale,
         "parameters":           parameters,
         "expected_improvement": improvement,
         "generated_at":         datetime.now(timezone.utc).isoformat(),
         "validated":            False,
     }
+
+
+def _enrich_with_llm(
+    edge_id: str,
+    road_type: str,
+    subtype: str,
+    lanes: int,
+    occupancy: float,
+    widenable: bool,
+    action: str,
+) -> str:
+    """
+    Call Ollama to generate an AI rationale for the lane change proposal.
+    Returns an empty string on failure (graceful degradation).
+    """
+    try:
+        from ai.ollama_client import get_ollama_client
+        client = get_ollama_client()
+        if not client.is_available():
+            return ""
+
+        widenable_str = (
+            "can be physically widened" if widenable
+            else "CANNOT be physically widened (buildings adjacent — no expansion possible)"
+        )
+        prompt = (
+            f"Lane reconfiguration proposal for edge {edge_id} ({road_type} road).\n"
+            f"Current lanes: {lanes}. Occupancy: {occupancy:.1%}. "
+            f"Status: {subtype}. Action: {action}. Road {widenable_str}.\n\n"
+            f"In 2 concise sentences, explain WHY this lane action is the optimal intervention "
+            f"for this specific situation. Address a city planner. No bullet points."
+        )
+        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=100)
+    except Exception as e:
+        log.debug(f"LLM enrichment skipped for edge {edge_id}: {e}")
+        return ""
 
 
 class LaneChangeRecommender:
@@ -49,18 +100,16 @@ class LaneChangeRecommender:
             if issue.get("type") != "lane_utilization":
                 continue
 
-            loc      = issue.get("location", {})
-            edge_id  = loc.get("edge_id", "")
-            u        = loc.get("node_u", 0)
-            v        = loc.get("node_v", 0)
-            subtype  = issue.get("subtype", "")
-            severity = issue.get("severity", "low")
-            edge     = edge_lookup.get(edge_id, {})
-            lanes    = edge.get("lanes", 1)
+            loc       = issue.get("location", {})
+            edge_id   = loc.get("edge_id", "")
+            u         = loc.get("node_u", 0)
+            v         = loc.get("node_v", 0)
+            subtype   = issue.get("subtype", "")
+            edge      = edge_lookup.get(edge_id, {})
+            lanes     = edge.get("lanes", 1)
             occupancy = edge.get("occupancy", 0)
             capacity  = edge.get("capacity", 800)
             road_type = edge.get("road_type", "road")
-
             widenable = edge.get("widenable", True)
 
             if subtype == "saturated" and lanes < 4:
@@ -68,15 +117,15 @@ class LaneChangeRecommender:
                     new_lanes = lanes + 1
                     counter += 1
                     params = {
-                        "edge": edge_id,
-                        "type": "lane_change",
+                        "edge":          edge_id,
+                        "type":          "lane_change",
                         "current_lanes": lanes,
                         "new_lanes":     new_lanes,
                         "action":        "ADD_LANE",
                     }
                     improvement = {
                         "expected_capacity_increase_pct": round(100 / lanes),
-                        "expected_occupancy_after":        round(occupancy * lanes / new_lanes, 4),
+                        "expected_occupancy_after":       round(occupancy * lanes / new_lanes, 4),
                         "rationale": f"Adding 1 lane increases capacity by {round(100/lanes)}%.",
                     }
                     desc = (
@@ -84,64 +133,71 @@ class LaneChangeRecommender:
                         f"(currently {lanes} lanes, occupancy {occupancy:.1%}). "
                         f"Expected capacity increase: {round(100/lanes)}%."
                     )
+                    ai_rationale = _enrich_with_llm(
+                        edge_id, road_type, subtype, lanes, occupancy, True, "ADD_LANE"
+                    )
                     proposals.append(_make_proposal(
-                        f"lane_add_{edge_id}_{counter}",
-                        issue["issue_id"],
-                        edge_id, u, v,
-                        "ADD_LANE", desc, params, improvement,
+                        f"lane_add_{edge_id}_{counter}", issue["issue_id"],
+                        edge_id, u, v, "ADD_LANE", desc, params, improvement, ai_rationale,
                     ))
+
                 else:
-                    # NOT widenable due to building constraints. Propose lane repurposing/dynamic flow
+                    # NOT widenable — propose dynamic lane management
                     counter += 1
                     params = {
-                        "edge": edge_id,
-                        "type": "lane_change",
+                        "edge":          edge_id,
+                        "type":          "lane_change",
                         "current_lanes": lanes,
                         "action":        "REPURPOSE_LANE",
                         "details":       "Tidal flow / Transit lane priority",
                     }
                     improvement = {
                         "expected_capacity_increase_pct": 15,
-                        "rationale": "Optimizes existing space without physical road expansion (restricted by buildings).",
+                        "rationale": (
+                            "Optimizes existing space without physical road expansion "
+                            "(restricted by buildings)."
+                        ),
                     }
                     desc = (
                         f"Implement dynamic lane control / bus priority lane on {road_type} edge {edge_id}. "
                         f"Physical road widening is restricted by building proximity. "
                         f"Optimizes existing {lanes} lanes."
                     )
+                    ai_rationale = _enrich_with_llm(
+                        edge_id, road_type, subtype, lanes, occupancy, False, "REPURPOSE_LANE"
+                    )
                     proposals.append(_make_proposal(
-                        f"lane_repurpose_{edge_id}_{counter}",
-                        issue["issue_id"],
-                        edge_id, u, v,
-                        "REPURPOSE_LANE", desc, params, improvement,
+                        f"lane_repurpose_{edge_id}_{counter}", issue["issue_id"],
+                        edge_id, u, v, "REPURPOSE_LANE", desc, params, improvement, ai_rationale,
                     ))
 
             elif subtype == "underutilized" and lanes >= 2:
                 new_lanes = lanes - 1
                 counter += 1
                 params = {
-                    "edge": edge_id,
-                    "type": "lane_change",
-                    "current_lanes": lanes,
-                    "new_lanes":     new_lanes,
-                    "action":        "REMOVE_LANE",
+                    "edge":                 edge_id,
+                    "type":                 "lane_change",
+                    "current_lanes":        lanes,
+                    "new_lanes":            new_lanes,
+                    "action":               "REMOVE_LANE",
                     "repurpose_suggestion": "cycle lane / parking / green buffer",
                 }
                 improvement = {
-                    "freed_lanes": 1,
+                    "freed_lanes":              1,
                     "expected_occupancy_after": round(occupancy * lanes / new_lanes, 4),
-                    "rationale": f"Removing 1 lane from underutilized road frees space for other uses.",
+                    "rationale": "Removing 1 lane from underutilized road frees space for other uses.",
                 }
                 desc = (
                     f"Remove 1 lane from {road_type} edge {edge_id} "
                     f"({lanes} lanes, only {occupancy:.1%} occupancy). "
                     f"Freed lane can be repurposed."
                 )
+                ai_rationale = _enrich_with_llm(
+                    edge_id, road_type, subtype, lanes, occupancy, True, "REMOVE_LANE"
+                )
                 proposals.append(_make_proposal(
-                    f"lane_remove_{edge_id}_{counter}",
-                    issue["issue_id"],
-                    edge_id, u, v,
-                    "REMOVE_LANE", desc, params, improvement,
+                    f"lane_remove_{edge_id}_{counter}", issue["issue_id"],
+                    edge_id, u, v, "REMOVE_LANE", desc, params, improvement, ai_rationale,
                 ))
 
         log.info(f"LaneChangeRecommender: {len(proposals)} proposals generated.")

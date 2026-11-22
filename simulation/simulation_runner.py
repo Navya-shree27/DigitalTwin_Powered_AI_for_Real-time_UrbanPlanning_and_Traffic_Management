@@ -70,7 +70,10 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
-import osmnx as ox
+try:
+    import osmnx as ox
+except ImportError:
+    ox = None
 from dotenv import load_dotenv
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -119,7 +122,31 @@ def load_graph(scenario_id: int | None = None) -> nx.MultiDiGraph:
         build_network()
 
     log.info(f"Loading graph from {graphml_path}")
-    G = ox.load_graphml(str(graphml_path))
+    is_lfs_pointer = False
+    try:
+        with open(graphml_path, "r", encoding="utf-8", errors="ignore") as f:
+            hdr = f.read(120)
+        if "git-lfs" in hdr or not ("<graphml" in hdr or "<?xml" in hdr):
+            is_lfs_pointer = True
+    except Exception:
+        pass
+
+    if is_lfs_pointer:
+        log.warning(f"{graphml_path} is a Git LFS pointer text file. Using synthetic road network topology...")
+        from ml.dataset_generator import _generate_fallback_grid_graph
+        G = _generate_fallback_grid_graph()
+    else:
+        try:
+            if ox is not None:
+                G = ox.load_graphml(str(graphml_path))
+            else:
+                G = nx.read_graphml(str(graphml_path))
+                if not isinstance(G, nx.MultiDiGraph):
+                    G = nx.MultiDiGraph(G)
+        except Exception as e:
+            log.warning(f"Error loading {graphml_path}: {e}. Falling back to synthetic grid network.")
+            from ml.dataset_generator import _generate_fallback_grid_graph
+            G = _generate_fallback_grid_graph()
     
     # Synchronize graph G nodes with the 10 real-world target signals
     target_ids = [571395243, 571407773, 1470841066, 1465243476, 1822610272, 1782305061, 2702258541, 1782236061, 1464736528, 1782269831]
@@ -405,6 +432,14 @@ def run_simulation(
         result = _run_cityflow(G, duration_s, seed)
     else:
         raise ValueError(f"Unknown engine: {engine!r}")
+
+    # ── ML Congestion Model Inference ────────────────────────────────────────
+    if "edges" in result and result["edges"]:
+        try:
+            from ml.predict import predict_congestion
+            result["edges"] = predict_congestion(result["edges"])
+        except Exception as e:
+            log.warning(f"ML inference skipped during simulation: {e}")
 
     result.update({
         "scenario_id":    scenario_id,

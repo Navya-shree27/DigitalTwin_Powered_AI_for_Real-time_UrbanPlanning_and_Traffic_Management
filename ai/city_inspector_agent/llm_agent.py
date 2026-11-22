@@ -3,19 +3,25 @@ ai/city_inspector_agent/llm_agent.py
 ─────────────────────────────────────────
 LLM-based City Inspector Agent.
 
-Receives structured simulation summaries, calls Claude (or OpenAI as fallback),
-and returns a human-readable narrative analysis plus a structured priorities list.
+Receives structured simulation summaries, calls the Ollama local LLM
+(llama3.2 / digital-twin-inspector), and returns a human-readable narrative
+analysis plus a structured priorities list.
 
 Graceful degradation
 ────────────────────
-If no API key is set (ANTHROPIC_API_KEY in .env), the agent falls back to a
-deterministic rule-based summary so the rest of the pipeline still works.
+If Ollama is not reachable, the agent falls back to a deterministic rule-based
+summary so the rest of the pipeline still works.
+
+Provider priority (auto-detected from .env):
+  1. ollama  — local Ollama (default; uses OLLAMA_MODEL_INSPECTOR)
+  2. anthropic — cloud Claude (requires ANTHROPIC_API_KEY)
+  3. rule-based — deterministic fallback (no AI)
 
 Usage
 ─────
     from ai.city_inspector_agent.llm_agent import CityInspectorAgent
     agent = CityInspectorAgent()
-    result = agent.analyze(scenario_id=1, telemetry=telemetry, issues=issues)
+    result = agent.analyze(scenario_id=1, scenario_name="...", telemetry=telemetry, issues=issues)
     print(result["narrative"])
 """
 
@@ -36,13 +42,13 @@ log = logging.getLogger("llm_agent")
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-# ── Try importing Anthropic ────────────────────────────────────────────────────
+# ── Try importing Anthropic (optional) ───────────────────────────────────────
 try:
     import anthropic  # type: ignore
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
-    log.warning("anthropic package not installed. Install with: pip install anthropic")
+    log.debug("anthropic package not installed — Ollama will be used instead.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,7 +161,7 @@ def _rule_based_summary(telemetry: dict, issues: list[dict]) -> str:
     if not severe_issues:
         lines.append("  No severe issues detected.")
     lines.append("")
-    lines.append("To enable AI narrative analysis, add ANTHROPIC_API_KEY to .env")
+    lines.append("To enable AI narrative analysis, set LLM_PROVIDER=ollama in .env and ensure Ollama is running (ollama serve)")
     return "\n".join(lines)
 
 
@@ -169,71 +175,84 @@ class CityInspectorAgent:
 
     Analyzes simulation telemetry and detected issues, returns a structured
     response with a human-readable narrative and prioritized recommendations.
+
+    Provider priority (from .env):
+      1. ollama    — local Ollama (OLLAMA_MODEL_INSPECTOR or OLLAMA_MODEL)
+      2. anthropic — cloud Claude (ANTHROPIC_API_KEY)
+      3. rule-based — deterministic fallback
     """
 
-    MODEL = "claude-3-5-sonnet-20241022"
+    ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"
     MAX_TOKENS = 1024
+
+    SYSTEM_PROMPT = (
+        "You are the AI City Inspector Agent, an expert urban traffic analyst "
+        "embedded in a Digital Twin traffic management system for Davanagere, Karnataka, India. "
+        "Be concise, data-grounded, and authoritative. Address a city planner audience. "
+        "If widenable=False on a road, never recommend physical widening — "
+        "use signal timing, transit priority, or routing instead."
+    )
 
     def __init__(self):
         self.provider = os.getenv("LLM_PROVIDER", "").lower()
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-        self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3")
 
-        # Auto-detect if provider not explicitly set:
+        # Ollama config — use the shared OllamaClient
+        from ai.ollama_client import get_ollama_client
+        self._ollama = get_ollama_client()
+
+        # Resolve model name for the inspector role
+        self._ollama_model = self._ollama.resolve_model("inspector")
+
+        # Auto-detect provider:
         if not self.provider:
-            if self.anthropic_key:
+            if self._ollama.is_available():
+                self.provider = "ollama"
+            elif self.anthropic_key:
                 self.provider = "anthropic"
             else:
                 self.provider = "rule-based"
 
-        self._client = None
+        # Initialize Anthropic client if needed
+        self._anthropic_client = None
         if self.provider == "anthropic" and self.anthropic_key and _ANTHROPIC_AVAILABLE:
-            self._client = anthropic.Anthropic(api_key=self.anthropic_key)
+            self._anthropic_client = anthropic.Anthropic(api_key=self.anthropic_key)
             log.info("CityInspectorAgent initialized with Claude API.")
         elif self.provider == "ollama":
-            log.info(f"CityInspectorAgent initialized with Ollama model '{self.ollama_model}' at {self.ollama_host}.")
+            if self._ollama.is_available():
+                log.info(
+                    f"CityInspectorAgent initialized with Ollama model "
+                    f"'{self._ollama_model}' at {self._ollama.host}."
+                )
+            else:
+                log.warning("Ollama not reachable — falling back to rule-based mode.")
+                self.provider = "rule-based"
         else:
             log.warning(
-                f"CityInspectorAgent in rule-based mode. Provider '{self.provider}' not available or keys missing."
+                f"CityInspectorAgent in rule-based mode. "
+                f"Provider '{self.provider}' not available or keys missing."
             )
 
     def _call_llm(self, prompt: str) -> str:
         """Call the selected LLM provider and return the response text."""
-        system_prompt = (
-            "You are the AI City Inspector Agent, an expert urban traffic analyst "
-            "embedded in a Digital Twin traffic management system. "
-            "Be concise, data-grounded, and authoritative. "
-            "Address a city planner audience."
-        )
-
-        if self.provider == "anthropic" and self._client:
-            message = self._client.messages.create(
-                model=self.MODEL,
+        if self.provider == "ollama" and self._ollama.is_available():
+            return self._ollama.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=self.SYSTEM_PROMPT,
+                role="inspector",
+                temperature=0.3,
                 max_tokens=self.MAX_TOKENS,
-                system=system_prompt,
+            )
+
+        elif self.provider == "anthropic" and self._anthropic_client:
+            message = self._anthropic_client.messages.create(
+                model=self.ANTHROPIC_MODEL,
+                max_tokens=self.MAX_TOKENS,
+                system=self.SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
             )
             return message.content[0].text
-        elif self.provider == "ollama":
-            import requests
-            url = f"{self.ollama_host}/api/chat"
-            payload = {
-                "model": self.ollama_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": False
-            }
-            try:
-                response = requests.post(url, json=payload, timeout=3)
-                response.raise_for_status()
-                result = response.json()
-                return result["message"]["content"]
-            except Exception as e:
-                log.error(f"Ollama call failed at {url}: {e}")
-                raise e
+
         else:
             raise RuntimeError("No valid LLM client/provider configured.")
 
@@ -269,11 +288,11 @@ class CityInspectorAgent:
         prior_summary = memory.get_prior_summary(scenario_id)
 
         # ── LLM or fallback ───────────────────────────────────────────────────
-        if self.provider == "ollama" or (self.provider == "anthropic" and self._client):
+        if self.provider == "ollama" or (self.provider == "anthropic" and self._anthropic_client):
             prompt = _build_analysis_prompt(scenario_name, telemetry, issues, prior_summary)
             try:
                 narrative = self._call_llm(prompt)
-                model_used = self.ollama_model if self.provider == "ollama" else self.MODEL
+                model_used = self._ollama_model if self.provider == "ollama" else self.ANTHROPIC_MODEL
             except Exception as e:
                 log.error(f"LLM call failed: {e}. Falling back to rule-based summary.")
                 narrative = _rule_based_summary(telemetry, issues)

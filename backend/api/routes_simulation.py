@@ -264,13 +264,21 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
 
         # Persist proposals (cap at 50)
         for prop_data in all_proposals[:50]:
+            params = dict(prop_data.get("parameters", {}))
+            if prop_data.get("ai_rationale"):
+                params["ai_rationale"] = prop_data["ai_rationale"]
+
+            desc = prop_data.get("description", "")
+            if prop_data.get("ai_rationale") and "AI Rationale:" not in desc:
+                desc = f"{desc} | AI Rationale: {prop_data['ai_rationale']}"
+
             proposal = Proposal(
                 run_id      = run_id,
                 proposal_id = prop_data["proposal_id"],
                 type        = prop_data["type"],
                 subtype     = prop_data.get("subtype"),
-                description = prop_data.get("description", ""),
-                parameters_json  = json.dumps(prop_data.get("parameters", {})),
+                description = desc,
+                parameters_json  = json.dumps(params),
                 improvement_json = json.dumps(prop_data.get("expected_improvement", {})),
             )
             db.add(proposal)

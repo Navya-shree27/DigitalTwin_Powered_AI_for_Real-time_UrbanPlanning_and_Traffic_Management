@@ -120,4 +120,12 @@ export const statusApi = {
   get: () => api.get('/status'),
 }
 
+// ── Machine Learning (ML) ───────────────────────────────────────────────────
+
+export const mlApi = {
+  getMetrics: () => api.get('/ml/metrics'),
+  predict: (edges) => api.post('/ml/predict', { edges }),
+  getScenarioPredictions: (scenarioId) => api.get(`/scenarios/${scenarioId}/ml-predictions`),
+}
+
 export default api

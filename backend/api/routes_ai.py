@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
@@ -26,6 +28,7 @@ from backend.models.schema import (
     Issue, Proposal, Scenario, SimulationRun, ValidationResult,
 )
 
+ROOT = Path(__file__).resolve().parent.parent.parent
 log = logging.getLogger("routes_ai")
 router = APIRouter(tags=["AI & Issues"])
 
@@ -283,3 +286,94 @@ def get_proposal(proposal_db_id: int, db: Session = Depends(get_db)) -> dict:
         "proposal":   proposal.to_dict(),
         "validation": vr.to_dict() if vr else None,
     }
+
+
+# ── Machine Learning (ML) Endpoints ──────────────────────────────────────────
+
+@router.get("/api/ml/metrics")
+def get_ml_metrics() -> dict:
+    """Return evaluation metrics and recorded test performance for the traffic ML model."""
+    metrics_path = ROOT / "results" / "model_metrics.json"
+    features_path = ROOT / "models" / "feature_names.json"
+
+    metrics_data = {}
+    if metrics_path.exists():
+        try:
+            metrics_data = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning(f"Error reading model metrics: {e}")
+
+    features_data = []
+    if features_path.exists():
+        try:
+            features_data = json.loads(features_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning(f"Error reading feature schema: {e}")
+
+    from ml.predict import get_predictor
+    predictor = get_predictor()
+
+    return {
+        "status": "ready" if predictor.is_ready else "heuristic_fallback",
+        "is_model_trained": predictor.is_ready,
+        "metrics": metrics_data,
+        "features": features_data,
+    }
+
+
+class MLPredictRequest(BaseModel):
+    edges: list[dict[str, Any]]
+
+
+MLPredictRequest.model_rebuild()
+
+
+@router.post("/api/ml/predict")
+def predict_traffic_congestion(payload: MLPredictRequest) -> dict:
+    """Run real-time inference on edge telemetry records using the trained ML model."""
+    from ml.predict import predict_congestion
+    try:
+        predictions = predict_congestion(payload.edges)
+        return {
+            "status": "ok",
+            "count": len(predictions),
+            "predictions": predictions,
+        }
+    except Exception as e:
+        log.error(f"Prediction failed: {e}")
+        raise HTTPException(500, f"ML inference failed: {e}")
+
+
+@router.get("/api/scenarios/{scenario_id}/ml-predictions")
+def get_scenario_ml_predictions(scenario_id: int, db: Session = Depends(get_db)) -> dict:
+    """Extract top ML-predicted congestion hotspots for the latest simulation run."""
+    run = _latest_done_run(scenario_id, db)
+    if not run:
+        raise HTTPException(404, f"No completed simulation run for scenario {scenario_id}.")
+
+    telemetry = run.get_telemetry()
+    edges = telemetry.get("edges", [])
+    if not edges:
+        return {"scenario_id": scenario_id, "hotspots": [], "summary": {}}
+
+    from ml.predict import predict_congestion
+    # Ensure edges have predictions
+    if not any("ml_congestion_level" in e for e in edges[:5]):
+        edges = predict_congestion(edges)
+
+    # Filter and sort by risk score
+    congested = [e for e in edges if e.get("ml_congestion_level", 0) > 0 or e.get("ml_risk_score", 0) > 0.4]
+    congested.sort(key=lambda x: (x.get("ml_congestion_level", 0), x.get("ml_risk_score", 0)), reverse=True)
+
+    severe_count = sum(1 for e in edges if e.get("ml_congestion_level") == 2)
+    moderate_count = sum(1 for e in edges if e.get("ml_congestion_level") == 1)
+
+    return {
+        "scenario_id": scenario_id,
+        "run_id": run.id,
+        "total_analyzed_edges": len(edges),
+        "predicted_severe_edges": severe_count,
+        "predicted_moderate_edges": moderate_count,
+        "top_hotspots": congested[:25],
+    }
+

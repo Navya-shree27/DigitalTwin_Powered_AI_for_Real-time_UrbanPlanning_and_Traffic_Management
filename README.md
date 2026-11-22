@@ -64,10 +64,27 @@ cp .env.example .env
 
 ### 3. Start the backend
 
-```bash
-cd backend
-uvicorn app:app --reload --port 8000
+> **Important:** Always run the backend from the **project root directory** (`digital-twin-traffic-ai`), **not** from inside the `backend` folder, so that the virtual environment (`venv`) and data paths resolve correctly.
+
+**Option A (Recommended — Direct via venv, no script activation needed):**
+```powershell
+# Windows (PowerShell):
+.\venv\Scripts\uvicorn.exe backend.app:app --reload --port 8000
+
+# Linux / macOS:
+./venv/bin/uvicorn backend.app:app --reload --port 8000
 ```
+
+**Option B (With active virtual environment):**
+```bash
+# Activate venv first:
+# Windows (PowerShell): .\venv\Scripts\Activate.ps1
+# Linux / macOS:        source venv/bin/activate
+
+uvicorn backend.app:app --reload --port 8000
+```
+
+> **Note on OSMnx / ModuleNotFoundError:** If you encounter `OSMnx is not installed in the active Python environment`, ensure you are launching Uvicorn using the `venv` path above and from the project root directory.
 
 API docs available at: http://localhost:8000/docs
 

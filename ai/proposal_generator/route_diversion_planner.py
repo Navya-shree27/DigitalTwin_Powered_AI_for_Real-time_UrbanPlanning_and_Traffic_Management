@@ -10,7 +10,8 @@ For each severely congested edge (u→v):
   2. Temporarily inflate the edge weight (travel time) to simulate discouraging it.
   3. Find the K-shortest alternative paths from u to v (Yen's algorithm via networkx).
   4. Select the best alternative that avoids the congested edge.
-  5. Emit a proposal describing the diversion route.
+  5. Enrich the proposal with AI-generated impact explanation via Ollama.
+  6. Emit a proposal describing the diversion route.
 """
 
 from __future__ import annotations
@@ -37,9 +38,42 @@ def _load_graph() -> nx.MultiDiGraph | None:
         return None
 
 
+def _enrich_with_llm(
+    edge_id: str,
+    occupancy: float,
+    n_hops: int,
+    n_nodes: int,
+    speed_ratio: float | None = None,
+) -> str:
+    """
+    Call Ollama to generate an AI explanation for the route diversion.
+    Returns empty string on failure (graceful degradation).
+    """
+    try:
+        from ai.ollama_client import get_ollama_client
+        client = get_ollama_client()
+        if not client.is_available():
+            return ""
+
+        ratio_str = f", speed ratio {speed_ratio:.2f}" if speed_ratio is not None else ""
+        prompt = (
+            f"Route diversion proposal for a severely congested edge (ID: {edge_id}). "
+            f"Occupancy: {occupancy:.1%}{ratio_str}. "
+            f"Alternative path: {n_hops} hops through {n_nodes} nodes.\n\n"
+            f"In 2 concise sentences, explain WHY routing traffic away from this edge "
+            f"via the alternative path will improve network flow. "
+            f"Mention expected traffic redistribution effect. No bullet points."
+        )
+        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=100)
+    except Exception as e:
+        log.debug(f"LLM enrichment skipped for diversion {edge_id}: {e}")
+        return ""
+
+
 def _make_proposal(
     proposal_id, issue_id, edge_id, u, v,
     alt_path_nodes, alt_path_length, description, parameters, improvement,
+    ai_rationale: str = "",
 ):
     return {
         "proposal_id":          proposal_id,
@@ -51,6 +85,7 @@ def _make_proposal(
             "node_v":  v,
         },
         "description":          description,
+        "ai_rationale":         ai_rationale,
         "parameters":           parameters,
         "expected_improvement": improvement,
         "generated_at":         datetime.now(timezone.utc).isoformat(),
@@ -145,6 +180,13 @@ class RouteDiversionPlanner:
                 f"(occupancy={metrics.get('occupancy', 0):.1%}) "
                 f"via a {n_hops}-hop alternative route through {len(best_path)} nodes."
             )
+            ai_rationale = _enrich_with_llm(
+                edge_id=edge_id,
+                occupancy=metrics.get("occupancy", 0),
+                n_hops=n_hops,
+                n_nodes=len(best_path),
+                speed_ratio=metrics.get("speed_ratio"),
+            )
             proposals.append(_make_proposal(
                 proposal_id       = f"diversion_{edge_id}_{counter}",
                 issue_id          = issue["issue_id"],
@@ -156,6 +198,7 @@ class RouteDiversionPlanner:
                 description       = desc,
                 parameters        = params,
                 improvement       = improvement,
+                ai_rationale      = ai_rationale,
             ))
 
         log.info(f"RouteDiversionPlanner: {len(proposals)} proposals generated.")

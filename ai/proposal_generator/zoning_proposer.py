@@ -8,7 +8,8 @@ For each flagged zone, the proposer:
   1. Reads the current area_by_type distribution.
   2. Simulates adding the complement land-use at a proposed fraction.
   3. Computes the new ENT after the proposed change.
-  4. Returns a ProposalRecord dict compatible with the Proposal DB table.
+  4. Enriches with AI urban planning rationale via Ollama.
+  5. Returns a ProposalRecord dict compatible with the Proposal DB table.
 
 Entropy equation (equ.md §5):
     ENT = -sum(P_i * ln(P_i)) / ln(k)
@@ -96,6 +97,40 @@ def _simulate_addition(
     return proposed
 
 
+def _enrich_with_llm(
+    zone_idx: int,
+    dominant_label: str,
+    complement_label: str,
+    current_ent: float,
+    proposed_ent: float,
+    delta_pct: float,
+    add_area: float,
+) -> str:
+    """
+    Call Ollama to generate an AI urban planning rationale for the zoning proposal.
+    Returns empty string on failure (graceful degradation).
+    """
+    try:
+        from ai.ollama_client import get_ollama_client
+        client = get_ollama_client()
+        if not client.is_available():
+            return ""
+
+        prompt = (
+            f"Urban land-use re-zoning proposal for Zone {zone_idx}.\n"
+            f"Dominant land use: {dominant_label}. Recommended complement: {complement_label}.\n"
+            f"Proposed conversion: {add_area:.0f} m2 (~20% of zone).\n"
+            f"Shannon Entropy: {current_ent:.2f} -> {proposed_ent:.2f} (+{delta_pct:.1f}% improvement).\n\n"
+            f"In 2 concise sentences, explain WHY introducing {complement_label} into this "
+            f"predominantly {dominant_label} zone promotes 15-minute city principles and "
+            f"reduces vehicular trip generation. Address an urban planner. No bullet points."
+        )
+        return client.generate(prompt, role="proposer", temperature=0.2, max_tokens=100)
+    except Exception as e:
+        log.debug(f"LLM enrichment skipped for zone {zone_idx}: {e}")
+        return ""
+
+
 # ── Proposal factory ──────────────────────────────────────────────────────────
 
 def _make_proposal(
@@ -111,6 +146,7 @@ def _make_proposal(
     convert_fraction: float,
     zone_area_m2: float,
     area_by_type: dict,
+    ai_rationale: str = "",
 ) -> dict:
     ent_gain   = round(proposed_ent - current_ent, 4)
     delta_pct  = round(ent_gain * 100, 2)   # equ.md §7 (increase direction)
@@ -135,7 +171,8 @@ def _make_proposal(
             "lon":      lon,
             "zone_idx": zone_idx,
         },
-        "description": description,
+        "description":  description,
+        "ai_rationale": ai_rationale,
         "parameters": {
             "dominant_use":          dominant_use,
             "dominant_use_label":    dominant_label,
@@ -218,6 +255,22 @@ class ZoningProposer:
                 continue
 
             counter += 1
+            dominant_label   = USE_LABELS.get(dominant_use,   dominant_use)
+            complement_label = USE_LABELS.get(complement, complement)
+            ent_gain         = round(proposed_ent - current_ent, 4)
+            delta_pct        = round(ent_gain * 100, 2)
+            add_area         = round(zone_area * self.convert_fraction, 1)
+
+            ai_rationale = _enrich_with_llm(
+                zone_idx=zone_idx,
+                dominant_label=dominant_label,
+                complement_label=complement_label,
+                current_ent=current_ent,
+                proposed_ent=proposed_ent,
+                delta_pct=delta_pct,
+                add_area=add_area,
+            )
+
             proposals.append(_make_proposal(
                 proposal_id      = f"zoning_{zone_idx}_{counter}",
                 issue_id         = issue["issue_id"],
@@ -231,6 +284,7 @@ class ZoningProposer:
                 convert_fraction = self.convert_fraction,
                 zone_area_m2     = zone_area,
                 area_by_type     = area_by_type,
+                ai_rationale     = ai_rationale,
             ))
 
         log.info(f"ZoningProposer: {len(proposals)} zoning proposals generated.")

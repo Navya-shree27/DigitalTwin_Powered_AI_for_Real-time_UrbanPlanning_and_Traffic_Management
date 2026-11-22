@@ -8,6 +8,7 @@ Start with:
     uvicorn backend.app:app --reload --port 8000
 
 API docs available at: http://localhost:8000/docs
+# Reloaded with OSMnx and TraCI lock fixes
 """
 
 from __future__ import annotations

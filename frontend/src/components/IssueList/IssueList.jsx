@@ -190,6 +190,9 @@ function IssueItem({ issue, isSelected, onSelect }) {
 
       {/* Metric pills */}
       <div className="issue-metrics-row">
+        {m.ml_prediction && (
+          <MetricPill label="AI Prediction" value={`${m.ml_prediction}${m.ml_risk_score != null ? ` (${(Number(m.ml_risk_score) * 100).toFixed(0)}%)` : ''}`} />
+        )}
         {m.speed_kph !== undefined && (
           <MetricPill label="Speed" value={`${Number(m.speed_kph).toFixed(1)} km/h`} />
         )}

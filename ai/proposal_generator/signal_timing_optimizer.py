@@ -9,7 +9,9 @@ For each flagged congestion or intersection-safety issue that involves an
 intersection node, it:
   1. Computes the total incoming flow to the intersection.
   2. Allocates green time proportionally to each approach (Webster's method).
-  3. Produces a proposal with revised phase durations.
+  3. Calls the Ollama LLM to enrich the proposal with AI rationale and
+     implementation guidance (gracefully degrades to pure Webster if unavailable).
+  4. Produces a proposal with revised phase durations.
 
 Webster's optimal cycle length formula:
   C_opt = (1.5 × L + 5) / (1 − Y)
@@ -20,6 +22,7 @@ Each proposal output conforms to the ProposalRecord schema.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from datetime import datetime, timezone
@@ -37,6 +40,7 @@ def _make_proposal(
     description: str,
     timing_plan: dict,
     expected_improvement: dict,
+    ai_rationale: str = "",
 ) -> dict:
     return {
         "proposal_id":          proposal_id,
@@ -48,11 +52,49 @@ def _make_proposal(
             "lon":     lon,
         },
         "description":          description,
+        "ai_rationale":         ai_rationale,
         "parameters":           timing_plan,
         "expected_improvement": expected_improvement,
         "generated_at":         datetime.now(timezone.utc).isoformat(),
         "validated":            False,
     }
+
+
+def _enrich_with_llm(
+    node_id: int,
+    sc: int,
+    n_phases: int,
+    C_opt: float,
+    Y: float,
+    approaches: list[tuple[float, float]],
+    current_wait: float,
+    expected_wait_reduction_pct: int,
+) -> str:
+    """
+    Call Ollama to generate an AI rationale for the signal timing proposal.
+    Returns an empty string on failure (graceful degradation).
+    """
+    try:
+        from ai.ollama_client import get_ollama_client
+        client = get_ollama_client()
+        if not client.is_available():
+            return ""
+
+        flows = [f"{round(f)} veh/h" for f, c in approaches[:n_phases]]
+        prompt = (
+            f"Traffic signal retiming proposal for node {node_id} ({sc}-approach intersection).\n"
+            f"Webster-optimal cycle: {round(C_opt)}s, {n_phases} phases.\n"
+            f"Critical flow ratio Y={Y:.2f}, current average wait={current_wait:.1f}s.\n"
+            f"Incoming approach flows: {', '.join(flows)}.\n"
+            f"Expected wait reduction: ~{expected_wait_reduction_pct}%.\n\n"
+            f"In 2-3 concise sentences, explain WHY this retiming will improve traffic flow "
+            f"at this intersection for a city planner audience. Focus on the engineering reasoning "
+            f"(over-saturation, phase imbalance, Webster optimality). No bullet points."
+        )
+        return client.generate(prompt, role="inspector", temperature=0.2, max_tokens=150)
+    except Exception as e:
+        log.debug(f"LLM enrichment skipped for node {node_id}: {e}")
+        return ""
 
 
 class SignalTimingOptimizer:
@@ -181,6 +223,19 @@ class SignalTimingOptimizer:
                 f"Proposed cycle: {round(C_opt)}s with {n_phases} phases. "
                 f"Expected wait reduction: ~{expected_wait_reduction_pct}%."
             )
+
+            # LLM enrichment for AI rationale
+            ai_rationale = _enrich_with_llm(
+                node_id=node_id,
+                sc=sc,
+                n_phases=n_phases,
+                C_opt=C_opt,
+                Y=Y,
+                approaches=approaches[:n_phases],
+                current_wait=current_wait,
+                expected_wait_reduction_pct=expected_wait_reduction_pct,
+            )
+
             proposals.append(_make_proposal(
                 proposal_id  = f"signal_{node_id}_{counter}",
                 issue_id     = issue["issue_id"],
@@ -190,6 +245,7 @@ class SignalTimingOptimizer:
                 description  = desc,
                 timing_plan  = timing_plan,
                 expected_improvement = improvement,
+                ai_rationale = ai_rationale,
             ))
 
         log.info(f"SignalTimingOptimizer: {len(proposals)} proposals generated.")

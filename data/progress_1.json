@@ -1,0 +1,1 @@
+{"scenario_id": 1, "run_id": 2, "status": "running", "progress": 92, "stage": "proposals", "stage_label": "Generating AI signal timing, lane change & diversion proposals...", "started_at": "2026-11-22T08:07:02.845186+00:00", "started_timestamp": 1795334822.8451717, "step": 300, "total_steps": 300, "elapsed_s": 39.7, "eta_s": 2.5, "steps_per_s": 351.7, "active_vehicles": 8}
