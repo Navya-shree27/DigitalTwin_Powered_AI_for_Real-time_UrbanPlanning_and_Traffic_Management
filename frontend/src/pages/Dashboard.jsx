@@ -6,6 +6,7 @@ import BeforeAfterToggle from '../components/BeforeAfterToggle/BeforeAfterToggle
 import ScenarioDropdown from '../components/ScenarioDropdown/ScenarioDropdown.jsx'
 import FormattedNarrative from '../components/Narrative/FormattedNarrative.jsx'
 import SignalPlanModal from '../components/SignalPlan/SignalPlanModal.jsx'
+import CitywideFailingPointsModal from '../components/FailingPoints/CitywideFailingPointsModal.jsx'
 import { scenariosApi, dashboardApi, proposalsApi, statusApi, googleMapsApi } from '../services/apiClient.js'
 import { formatElapsed, formatETA, formatDuration } from '../utils/timeFormat.js'
 import './Dashboard.css'
@@ -39,6 +40,7 @@ export default function Dashboard() {
   const [intersectionSimNode, setIntersectionSimNode] = useState(null)
   const [signalRelocateNode, setSignalRelocateNode] = useState(null)
   const [signalPlanFilter, setSignalPlanFilter]       = useState(null)
+  const [showCitywideFailingModal, setShowCitywideFailingModal] = useState(false)
   const [narrativeLoading, setNarrativeLoading]   = useState(false)
 
   // Live Timer State
@@ -379,19 +381,29 @@ export default function Dashboard() {
                     {hasRun ? '▶ Re-simulate' : '▶ Run Simulation'}
                   </button>
                   {activeScenarioId && (
-                    <button
-                      className={`btn ${editMode ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => {
-                        const next = !editMode
-                        setEditMode(next)
-                        setSelectedNode(null)
-                        setCustomSimResult(null)
-                        if (next) setRightSidebarOpen(true)  // auto-open right panel when entering sandbox
-                      }}
-                      id="btn-toggle-edit-mode"
-                    >
-                      {editMode ? '⚙️ Exit Sandbox' : '🛠️ Signal Sandbox'}
-                    </button>
+                    <>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => setShowCitywideFailingModal(true)}
+                        title="View progressive vehicle ramp-up failing points for all signals & unsignalized junctions"
+                        style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}
+                      >
+                        ⚡ Failing Points
+                      </button>
+                      <button
+                        className={`btn ${editMode ? 'btn-primary' : 'btn-ghost'}`}
+                        onClick={() => {
+                          const next = !editMode
+                          setEditMode(next)
+                          setSelectedNode(null)
+                          setCustomSimResult(null)
+                          if (next) setRightSidebarOpen(true)  // auto-open right panel when entering sandbox
+                        }}
+                        id="btn-toggle-edit-mode"
+                      >
+                        {editMode ? '⚙️ Exit Sandbox' : '🛠️ Signal Sandbox'}
+                      </button>
+                    </>
                   )}
                 </>
               )}
@@ -879,6 +891,20 @@ export default function Dashboard() {
           }}
           onSimulateIntersection={(node) => setIntersectionSimNode(node)}
           onRelocateSignal={(node) => setSignalRelocateNode(node)}
+        />
+      )}
+
+      {/* ── Citywide Failing Points & Stress Test Modal ───────────────── */}
+      {showCitywideFailingModal && (
+        <CitywideFailingPointsModal
+          scenarioId={activeScenarioId}
+          onClose={() => setShowCitywideFailingModal(false)}
+          onSimulateIntersection={(node) => setIntersectionSimNode(node)}
+          onSelectNode={(node) => {
+            setSelectedNode(node)
+            setEditMode(true)
+            setRightSidebarOpen(true)
+          }}
         />
       )}
     </div>

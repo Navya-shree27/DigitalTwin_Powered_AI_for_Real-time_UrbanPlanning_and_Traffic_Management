@@ -177,7 +177,19 @@ def compute_metrics(telemetry: dict) -> dict:
     else:
         los = "F"
 
-    eff_score = 100.0 - (active_congestion_ratio * 40.0) - (min(avg_wait, 60.0) / 60.0 * 30.0)
+    avg_speed = float(np.mean(active_speeds)) if len(active_speeds) else 0.0
+    avg_ff_speed = float(np.mean(active_ff_speeds)) if len(active_ff_speeds) else 40.0
+    speed_performance_ratio = min(avg_speed / max(avg_ff_speed, 1.0), 1.0)
+
+    # Composite Network Efficiency Index (0 - 100):
+    # 1. Speed Performance Component (40% weight): Compares actual operating speed against design free-flow speed
+    # 2. Congestion Freedom Component (35% weight): Ratio of edges maintaining sub-saturation traffic flow
+    # 3. Intersection Wait Component (25% weight): Penalizes intersection queueing and stop-and-go delay
+    speed_comp = speed_performance_ratio * 40.0
+    congestion_comp = max(0.0, (1.0 - active_congestion_ratio)) * 35.0
+    wait_comp = max(0.0, (1.0 - min(avg_wait, 60.0) / 60.0)) * 25.0
+
+    eff_score = speed_comp + congestion_comp + wait_comp
     efficiency_score = round(float(np.clip(eff_score, 0.0, 100.0)), 1)
 
     # ── equ.md §1 — Weighted Intersection Delay ──────────────────────────────

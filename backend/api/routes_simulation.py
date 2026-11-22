@@ -1118,7 +1118,7 @@ def simulate_intersection_endpoint(
 @router.get("/{scenario_id}/failing-points")
 def get_citywide_failing_points(
     scenario_id: int,
-    limit: int = 50,
+    limit: int = 150,
     db: Session = Depends(get_db),
 ) -> dict:
     """

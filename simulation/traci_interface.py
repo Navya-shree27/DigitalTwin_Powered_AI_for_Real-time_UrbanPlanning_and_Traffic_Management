@@ -344,6 +344,9 @@ class SUMOTraCIInterface:
             "--seed", str(self.seed),
             "--no-warnings", "true",
             "--duration-log.statistics", "true",
+            "--collision.action", "warn",
+            "--collision.check-junctions", "true",
+            "--collision.mingap-factor", "0.5",
         ]
         traci.start(cmd, label=self._label)
         self._is_running = True
@@ -604,11 +607,33 @@ class SUMOTraCIInterface:
         nodes_out = []
         for node_id, data in self.G.nodes(data=True):
             is_signal = data.get("highway") == "traffic_signals"
-            
-            # Derive node average waiting time from its incoming edges
+            sc = int(data.get("street_count", 3))
+
+            # Derive node average waiting time and total flow from its incoming edges
             node_incoming_waits = [e["wait_time"] for e in edges_out if e["v"] == node_id]
-            avg_wait = np.mean(node_incoming_waits) if node_incoming_waits else 0.0
-            
+            node_incoming_flows = [e["flow"] for e in edges_out if e["v"] == node_id]
+            avg_wait = float(np.mean(node_incoming_waits)) if node_incoming_waits else 0.0
+            sum_flow = float(np.sum(node_incoming_flows)) if node_incoming_flows else 0.0
+
+            # Conflict & Collision Modeling:
+            # - Signalized junctions: protected phases regulate crossing flows, but heavy approaches create queue conflicts
+            # - Unsignalized junctions (priority/uncontrolled): vehicles must perform gap acceptance across intersecting paths
+            #   without signal protection. Conflict points scale nonlinearly with approach count (sc >= 3).
+            if is_signal:
+                base_conflict = (sum_flow / 3200.0) * (sc / 4.0)
+                conflict_rate = float(np.clip(base_conflict * 0.50 + (avg_wait / 50.0) * 0.70, 0.0, 5.0))
+                collision_risk = float(np.clip(0.05 + (sum_flow / 4000.0) * 0.25 + (avg_wait / 100.0) * 0.20, 0.05, 0.75))
+            else:
+                # Unsignalized junction with 3+ approaches carries severe crossing hazard under heavy traffic
+                if sc >= 3:
+                    conflict_mult = 1.75 if sc >= 4 else 1.30
+                    base_conflict = (sum_flow / 1800.0) * conflict_mult
+                    conflict_rate = float(np.clip(base_conflict + (avg_wait / 25.0) * 0.60, 0.10, 5.0))
+                    collision_risk = float(np.clip(0.18 + (conflict_rate / 3.0) * 0.55, 0.12, 0.95))
+                else:
+                    conflict_rate = float(np.clip((sum_flow / 3500.0) * 0.30, 0.0, 1.5))
+                    collision_risk = float(np.clip(0.08 + (sum_flow / 5000.0) * 0.15, 0.05, 0.40))
+
             has_sidewalk = False
             for u_e, v_e, k_e, edata in self.G.edges(data=True, keys=True):
                 if u_e == node_id or v_e == node_id:
@@ -620,8 +645,9 @@ class SUMOTraCIInterface:
                 "node_id": node_id,
                 "lat": float(data.get("y", 14.4644)),
                 "lon": float(data.get("x", 75.9218)),
-                "street_count": int(data.get("street_count", 3)),
-                "conflict_rate": round(avg_wait * 0.12, 2) if is_signal else round(avg_wait * 0.02, 2),
+                "street_count": sc,
+                "conflict_rate": round(conflict_rate, 2),
+                "collision_risk_score": round(collision_risk, 3),
                 "avg_wait_time": round(avg_wait, 1),
                 "highway": data.get("highway"),
                 "designation": data.get("designation"),
