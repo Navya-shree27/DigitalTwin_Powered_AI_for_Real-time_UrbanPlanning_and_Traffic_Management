@@ -321,28 +321,40 @@ export default function Dashboard() {
 
         <div className="header-right">
           {/* SUMO / Engine status chip */}
-          {systemStatus && (
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '4px 10px', borderRadius: 20,
-                fontSize: 11, fontWeight: 600,
-                background: systemStatus.sumo?.available
-                  ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)',
-                border: `1px solid ${systemStatus.sumo?.available
-                  ? 'rgba(34,197,94,0.4)' : 'rgba(251,191,36,0.4)'}`,
-                color: systemStatus.sumo?.available ? '#86efac' : '#fde68a',
-              }}
-              title={systemStatus.sumo?.available
-                ? `SUMO v${systemStatus.sumo.version} — Live simulation available`
-                : 'SUMO not installed — using synthetic simulation (set SUMO_HOME in .env)'}
-            >
-              <span style={{ fontSize: 8 }}>●</span>
-              {systemStatus.sumo?.available
-                ? `SUMO v${systemStatus.sumo.version}`
-                : 'Synthetic Mode'}
-            </div>
-          )}
+          {systemStatus && (() => {
+            const rawVer = systemStatus.sumo?.version || ''
+            const m = String(rawVer).match(/(\d+\.\d+(?:\.\d+)?)/)
+            const cleanVer = m ? `v${m[1]}` : (rawVer ? `v${rawVer}` : '')
+            const label = systemStatus.sumo?.available ? `SUMO ${cleanVer}`.trim() : 'Synthetic Mode'
+            return (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 10px',
+                  borderRadius: 20,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  height: 26,
+                  lineHeight: '18px',
+                  background: systemStatus.sumo?.available
+                    ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)',
+                  border: `1px solid ${systemStatus.sumo?.available
+                    ? 'rgba(34,197,94,0.4)' : 'rgba(251,191,36,0.4)'}`,
+                  color: systemStatus.sumo?.available ? '#86efac' : '#fde68a',
+                }}
+                title={systemStatus.sumo?.available
+                  ? `Eclipse SUMO ${cleanVer || 'Engine'} — Live simulation available`
+                  : 'SUMO not installed — using synthetic simulation (set SUMO_HOME in .env)'}
+              >
+                <span style={{ fontSize: 8 }}>●</span>
+                {label}
+              </div>
+            )
+          })()}
           {simRunning && (
             <div className="sim-status sim-status-timer">
               <div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} />

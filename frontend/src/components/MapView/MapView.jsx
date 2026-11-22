@@ -448,47 +448,80 @@ export default function MapView({
           const p = e.features[0].properties
           const coords = e.lngLat
 
+          const roadName = p.name ? String(p.name).trim() : ''
           const roadType = (p.road_type || p.highway || 'Urban Road').replace(/_/g, ' ')
-          const speedSim = p.speed_sim ? `${Number(p.speed_sim).toFixed(1)} km/h` : '–'
-          const speedFf = p.speed_kph ? `${Number(p.speed_kph).toFixed(0)} km/h` : '40 km/h'
-          const flow = p.flow ? `${Number(p.flow).toFixed(0)} veh/h` : '–'
-          const occ = p.occupancy ? `${(Number(p.occupancy) * 100).toFixed(0)}%` : '–'
-          const statusLabel = p.traffic_status === 'congested'
-            ? '🔴 Severe Congestion'
-            : (p.traffic_status === 'moderate' ? '🟡 Moderate Traffic' : '🟢 Free Flow')
+          const title = roadName || `${roadType.charAt(0).toUpperCase() + roadType.slice(1)} Corridor`
+          const subtitle = roadName ? `${roadType.charAt(0).toUpperCase() + roadType.slice(1)}` : 'Segment'
+
+          const speedSimNum = (p.speed_sim != null && Number(p.speed_sim) > 0) ? Number(p.speed_sim) : null
+          const speedFfNum = (p.speed_kph != null && Number(p.speed_kph) > 0) ? Number(p.speed_kph) : 40
+          const flowNum = (p.flow != null && Number(p.flow) >= 0) ? Number(p.flow) : null
+          const occNum = (p.occupancy != null && Number(p.occupancy) >= 0) ? Number(p.occupancy) : null
+
+          const speedDisplay = speedSimNum !== null
+            ? `${speedSimNum.toFixed(1)} km/h <span style="color:#94a3b8; font-weight:normal; font-size:10px;">(vs ${speedFfNum.toFixed(0)} limit)</span>`
+            : `${speedFfNum.toFixed(0)} km/h <span style="color:#94a3b8; font-weight:normal; font-size:10px;">(Free flow)</span>`
+
+          const flowDisplay = flowNum !== null
+            ? `${Math.round(flowNum)} veh/h`
+            : 'Off-peak / Nominal'
+
+          const occDisplay = occNum !== null
+            ? `${(occNum * 100).toFixed(1)}%`
+            : 'Nominal (< 5%)'
+
+          let statusBadge = ''
+          if (p.traffic_status === 'congested' || (occNum && occNum > 0.65)) {
+            statusBadge = '<span style="background: rgba(239,68,68,0.25); border: 1px solid rgba(239,68,68,0.45); color: #fca5a5; padding: 2px 8px; border-radius: 99px; font-weight: 600; font-size: 11px;">🔴 Severe Congestion</span>'
+          } else if (p.traffic_status === 'moderate' || (occNum && occNum > 0.35)) {
+            statusBadge = '<span style="background: rgba(245,158,11,0.25); border: 1px solid rgba(245,158,11,0.45); color: #fde68a; padding: 2px 8px; border-radius: 99px; font-weight: 600; font-size: 11px;">🟡 Moderate Traffic</span>'
+          } else {
+            statusBadge = '<span style="background: rgba(34,197,94,0.25); border: 1px solid rgba(34,197,94,0.45); color: #86efac; padding: 2px 8px; border-radius: 99px; font-weight: 600; font-size: 11px;">🟢 Free Flow</span>'
+          }
+
+          const targetNode = p.u || p.v
 
           const popupContent = document.createElement('div')
-          popupContent.style.cssText = 'padding: 4px; font-family: system-ui, sans-serif; min-width: 200px;'
+          popupContent.style.cssText = 'padding: 4px; font-family: system-ui, -apple-system, sans-serif; min-width: 210px; color: #f8fafc;'
           popupContent.innerHTML = `
-            <div style="font-weight: 700; font-size: 13px; color: #fff; text-transform: capitalize; margin-bottom: 4px;">
-              ${roadType} Corridor
-            </div>
-            <div style="font-size: 11px; margin-bottom: 8px;">
-              <span>${statusLabel}</span>
-            </div>
-            <div style="background: rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;">
-              <div style="display: flex; justify-content: space-between;">
-                <span style="color: #94a3b8;">Speed:</span>
-                <strong>${speedSim} / ${speedFf}</strong>
+            <div style="margin-bottom: 8px;">
+              <div style="font-weight: 700; font-size: 13px; color: #f8fafc; text-transform: capitalize; margin-bottom: 2px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                <span>${title}</span>
+                <span style="font-size: 10px; color: #94a3b8; font-weight: 500;">${subtitle}</span>
               </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span style="color: #94a3b8;">Flow:</span>
-                <strong>${flow}</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span style="color: #94a3b8;">Occupancy:</span>
-                <strong>${occ}</strong>
+              <div style="margin-top: 4px;">
+                ${statusBadge}
               </div>
             </div>
-            ${p.u ? `
-              <button id="edge-stress-btn" style="width: 100%; padding: 5px 8px; border-radius: 6px; background: #3b82f6; color: white; border: none; font-size: 11px; font-weight: 600; cursor: pointer;">
-                ⚡ Stress Test Intersection (Node ${p.u})
+            <div style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 10px; font-size: 11px; display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #94a3b8; font-weight: 500;">Speed:</span>
+                <span style="color: #f8fafc; font-weight: 600;">${speedDisplay}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #94a3b8; font-weight: 500;">Flow:</span>
+                <span style="color: #38bdf8; font-weight: 600;">${flowDisplay}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #94a3b8; font-weight: 500;">Occupancy:</span>
+                <span style="color: ${occNum && occNum > 0.5 ? '#ef4444' : '#e2e8f0'}; font-weight: 600;">${occDisplay}</span>
+              </div>
+              ${p.lanes ? `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="color: #94a3b8; font-weight: 500;">Lanes:</span>
+                  <span style="color: #e2e8f0; font-weight: 600;">${p.lanes} lane${p.lanes > 1 ? 's' : ''}</span>
+                </div>
+              ` : ''}
+            </div>
+            ${targetNode ? `
+              <button id="edge-stress-btn" style="width: 100%; padding: 7px 10px; border-radius: 8px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; border: 1px solid rgba(255,255,255,0.2); font-size: 11px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(37,99,235,0.3); transition: all 0.15s ease;">
+                ⚡ Stress Test Intersection (Node ${targetNode})
               </button>
             ` : ''}
           `
 
           popupContent.querySelector('#edge-stress-btn')?.addEventListener('click', () => {
-            onSimulateIntersection?.({ id: p.u, osmid: p.u, properties: { osmid: p.u } })
+            onSimulateIntersection?.({ id: targetNode, osmid: targetNode, properties: { osmid: targetNode } })
             issuePopupRef.current?.remove()
           })
 

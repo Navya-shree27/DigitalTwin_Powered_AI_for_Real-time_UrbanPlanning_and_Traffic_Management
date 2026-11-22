@@ -333,3 +333,64 @@ body {
 .empty-state-icon { font-size: 40px; opacity: 0.4; }
 .empty-state-title { font-size: 15px; font-weight: 600; color: var(--text-secondary); }
 .empty-state-desc  { font-size: 13px; max-width: 240px; }
+
+/* ─── MapLibre Popups (Global Dark Theme & Glassmorphism) ───────────────────── */
+.maplibregl-popup {
+  z-index: 30;
+  max-width: 340px !important;
+}
+
+.maplibregl-popup-content,
+.issue-map-popup .maplibregl-popup-content,
+.dark-map-popup .maplibregl-popup-content {
+  background: rgba(15, 23, 42, 0.95) !important;
+  backdrop-filter: blur(16px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 20px 35px -5px rgba(0, 0, 0, 0.7), 0 0 1px 1px rgba(255, 255, 255, 0.1) !important;
+  padding: 12px 14px !important;
+  color: #f8fafc !important;
+}
+
+/* Custom popup tips pointing to the map location */
+.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+/* Close button */
+.maplibregl-popup-close-button {
+  color: #94a3b8 !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  padding: 4px 8px !important;
+  border-radius: 6px !important;
+  right: 6px !important;
+  top: 6px !important;
+  line-height: 1 !important;
+  border: none !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  transition: color 0.15s ease, background-color 0.15s ease !important;
+}
+
+.maplibregl-popup-close-button:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  color: #f1f5f9 !important;
+}

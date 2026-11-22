@@ -187,6 +187,7 @@ def _which_netconvert():
 def _probe_version(sumo_bin) -> str | None:
     """Run `sumo --version` and extract the version string."""
     try:
+        import re
         result = subprocess.run(
             [str(sumo_bin), "--version"],
             capture_output=True,
@@ -196,15 +197,14 @@ def _probe_version(sumo_bin) -> str | None:
         output = result.stdout + result.stderr
         for line in output.splitlines():
             line = line.strip()
-            # Version line looks like: "SUMO sumo Version 1.19.0"
-            if "version" in line.lower() or "sumo" in line.lower():
-                parts = line.split()
-                for i, part in enumerate(parts):
-                    if part.lower() in ("version", "v") and i + 1 < len(parts):
-                        return parts[i + 1].strip(",")
-                # Fallback: return the whole first meaningful line
-                if line:
-                    return line[:60]
+            # Version line often contains e.g. "Eclipse SUMO sumo Version 1.26.0" or "1.26.0"
+            m = re.search(r'\b(\d+\.\d+(?:\.\d+)?)\b', line)
+            if m:
+                return m.group(1)
+            parts = line.split()
+            for i, part in enumerate(parts):
+                if part.lower() in ("version", "v") and i + 1 < len(parts):
+                    return parts[i + 1].strip(",")
         return "unknown"
     except Exception as exc:
         log.debug(f"SUMO version probe failed: {exc}")

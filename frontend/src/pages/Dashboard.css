@@ -10,19 +10,54 @@
 /* ── Header ─────────────────────────────────────────────────────────────────── */
 .dashboard-header {
   height: var(--header-height);
-  background: rgba(10, 10, 12, 0.7);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(10, 10, 12, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(20px) saturate(180%);
   display: flex;
   align-items: center;
-  padding: 0 20px;
-  gap: 16px;
+  justify-content: space-between;
+  padding: 0 16px;
+  gap: 12px;
   flex-shrink: 0;
   z-index: 100;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
 }
-.header-left  { display: flex; align-items: center; min-width: 260px; }
-.header-center { flex: 1; display: flex; align-items: center; gap: 8px; justify-content: center; }
-.header-right  { display: flex; align-items: center; gap: 12px; min-width: 220px; justify-content: flex-end; }
+.dashboard-header::-webkit-scrollbar {
+  display: none;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.header-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.dashboard-header button,
+.dashboard-header .btn,
+.dashboard-header select,
+.dashboard-header .scenario-dropdown-trigger {
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
 
 .header-logo {
   display: flex;
