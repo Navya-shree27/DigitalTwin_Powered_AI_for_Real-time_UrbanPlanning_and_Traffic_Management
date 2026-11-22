@@ -87,7 +87,7 @@ export const scenariosApi = {
     api.post(`/scenarios/${scenarioId}/signals/${nodeId}/failing-point`, payload),
 
   generateNarrative: (scenarioId) =>
-    api.post(`/scenarios/${scenarioId}/generate-narrative`),
+    api.post(`/scenarios/${scenarioId}/generate-narrative`, {}, { timeout: 35000 }),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────

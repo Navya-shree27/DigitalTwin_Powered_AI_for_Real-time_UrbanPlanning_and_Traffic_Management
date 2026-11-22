@@ -383,6 +383,7 @@ def generate_scenario_narrative(scenario_id: int, db: Session = Depends(get_db))
     """
     Generate or refresh the AI City Inspector narrative for the latest run.
     Uses local Ollama (digital-twin-inspector) with rule-based fallback.
+    Guaranteed response within <= 15s to prevent frontend timeouts.
     """
     scenario = db.query(Scenario).get(scenario_id)
     if not scenario:
@@ -398,14 +399,25 @@ def generate_scenario_narrative(scenario_id: int, db: Session = Depends(get_db))
 
     issues = [i.to_dict() for i in db.query(Issue).filter(Issue.run_id == run.id).all()]
 
-    from ai.city_inspector_agent.llm_agent import CityInspectorAgent
-    agent = CityInspectorAgent()
-    agent_result = agent.analyze(
-        scenario_id=scenario_id,
-        scenario_name=scenario.name,
-        telemetry=telemetry,
-        issues=issues,
-    )
+    try:
+        from ai.city_inspector_agent.llm_agent import CityInspectorAgent
+        agent = CityInspectorAgent()
+        agent_result = agent.analyze(
+            scenario_id=scenario_id,
+            scenario_name=scenario.name,
+            telemetry=telemetry,
+            issues=issues,
+        )
+    except Exception as e:
+        log.warning(f"Error during AI analysis ({e}). Using deterministic live rule-based summary.")
+        from ai.city_inspector_agent.llm_agent import _rule_based_summary
+        narrative = _rule_based_summary(telemetry, issues)
+        agent_result = {
+            "narrative": narrative,
+            "model": f"rule-based (fallback: {type(e).__name__})",
+            "top_issues": issues[:5],
+            "recommendations": [],
+        }
 
     narrative = agent_result.get("narrative", "")
     if narrative:

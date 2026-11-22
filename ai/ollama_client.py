@@ -151,6 +151,8 @@ class OllamaClient:
         temperature: float = 0.3,
         max_tokens: int | None = None,
         stream: bool = False,
+        timeout: int | float | None = None,
+        retries: int | None = None,
     ) -> str:
         """
         Send a chat request to Ollama and return the response text.
@@ -164,6 +166,8 @@ class OllamaClient:
         temperature   : Sampling temperature (0.0–1.0).
         max_tokens    : Max tokens in response (None = model default).
         stream        : If True, streams and collects chunks.
+        timeout       : Custom timeout in seconds (overrides client default).
+        retries       : Custom retry count (overrides client default).
 
         Returns
         ───────
@@ -186,10 +190,13 @@ class OllamaClient:
         if max_tokens:
             payload["options"]["num_predict"] = max_tokens
 
+        req_timeout = timeout if timeout is not None else self.timeout
+        max_attempts = (retries if retries is not None else self.max_retries) + 1
+
         last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(max_attempts):
             try:
-                resp = requests.post(url, json=payload, timeout=self.timeout, stream=stream)
+                resp = requests.post(url, json=payload, timeout=req_timeout, stream=stream)
                 resp.raise_for_status()
 
                 if stream:
@@ -198,21 +205,21 @@ class OllamaClient:
                     return resp.json()["message"]["content"]
 
             except requests.exceptions.Timeout as e:
-                log.warning(f"Ollama timeout on attempt {attempt + 1}/{self.max_retries + 1}: {e}")
+                log.warning(f"Ollama timeout on attempt {attempt + 1}/{max_attempts}: {e}")
                 last_exc = e
             except requests.exceptions.RequestException as e:
-                log.warning(f"Ollama request error on attempt {attempt + 1}/{self.max_retries + 1}: {e}")
+                log.warning(f"Ollama request error on attempt {attempt + 1}/{max_attempts}: {e}")
                 last_exc = e
             except (KeyError, ValueError) as e:
                 log.error(f"Unexpected Ollama response format: {e}")
                 raise RuntimeError(f"Ollama response parse error: {e}") from e
 
-            if attempt < self.max_retries:
+            if attempt < max_attempts - 1:
                 delay = self.retry_delay * (2 ** attempt)
                 log.info(f"Retrying in {delay:.1f}s...")
                 time.sleep(delay)
 
-        raise RuntimeError(f"Ollama call failed after {self.max_retries + 1} attempts: {last_exc}")
+        raise RuntimeError(f"Ollama call failed after {max_attempts} attempts: {last_exc}")
 
     def _collect_stream(self, resp: requests.Response) -> str:
         """Collect streamed response chunks into a single string."""
