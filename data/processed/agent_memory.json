@@ -2,18 +2,6 @@
   "1": [
     {
       "scenario_id": 1,
-      "cycle": 4,
-      "timestamp": "2026-07-10T09:15:47.441195+00:00",
-      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
-      "key_metrics": {
-        "avg_speed_kph": 29.2,
-        "avg_travel_time_s": 25.66,
-        "congestion_ratio": 0.0,
-        "severe_issues": 0
-      }
-    },
-    {
-      "scenario_id": 1,
       "cycle": 5,
       "timestamp": "2026-07-17T16:45:23.834715+00:00",
       "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: GOOD\n\u2022 Average speed: 29.2 km/h | Average wait: 0.0s\n\u2022 Congestion ratio: 0.0% (0 congested edges)\n\u2022 Severe issues detected: 0\n\nTop issues:\n  No severe issues detected.\n\nTo enable AI narrative analysis, add ANTHROPIC_API_KEY to .env",
@@ -113,6 +101,18 @@
       "cycle": 15,
       "timestamp": "2026-11-22T14:07:17.781327+00:00",
       "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics\n**Network Health: GOOD**\n\u2022 **Average Speed**: 27.9 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (2 congested edges)\n\u2022 **Severe Hotspots**: 2 identified across the corridor network.\n\n### \ud83d\udea6 Traffic Signal Infrastructure & Placement Plan\n\u2022 No new si\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.94,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0003,
+        "severe_issues": 2
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 16,
+      "timestamp": "2026-11-22T14:14:33.187397+00:00",
+      "summary": "### \ud83c\udfd9\ufe0f Network Traffic Diagnostics & Executive Summary\n**Network Overall Health: EXCELLENT (Efficiency Score: 98/100)**\nThe network exhibits an exceptionally healthy traffic profile under SUMO simulation.\n\u2022 **Average Speed**: 27.9 km/h | **Average Wait Time**: 0.0s\n\u2022 **Congestion Ratio**: 0.0% (2 of\u2026",
       "key_metrics": {
         "avg_speed_kph": 27.94,
         "avg_travel_time_s": 9.55,
