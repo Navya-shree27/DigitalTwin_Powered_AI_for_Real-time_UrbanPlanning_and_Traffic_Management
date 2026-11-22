@@ -4,6 +4,8 @@ import MetricsPanel from '../components/MetricsPanel/MetricsPanel.jsx'
 import IssueList from '../components/IssueList/IssueList.jsx'
 import BeforeAfterToggle from '../components/BeforeAfterToggle/BeforeAfterToggle.jsx'
 import ScenarioDropdown from '../components/ScenarioDropdown/ScenarioDropdown.jsx'
+import FormattedNarrative from '../components/Narrative/FormattedNarrative.jsx'
+import SignalPlanModal from '../components/SignalPlan/SignalPlanModal.jsx'
 import { scenariosApi, dashboardApi, proposalsApi, statusApi, googleMapsApi } from '../services/apiClient.js'
 import { formatElapsed, formatETA, formatDuration } from '../utils/timeFormat.js'
 import './Dashboard.css'
@@ -36,6 +38,7 @@ export default function Dashboard() {
   // Modal state
   const [intersectionSimNode, setIntersectionSimNode] = useState(null)
   const [signalRelocateNode, setSignalRelocateNode] = useState(null)
+  const [signalPlanFilter, setSignalPlanFilter]       = useState(null)
   const [narrativeLoading, setNarrativeLoading]   = useState(false)
 
   // Live Timer State
@@ -491,12 +494,19 @@ export default function Dashboard() {
                     background: 'rgba(10, 132, 255, 0.05)', 
                     border: '1px solid rgba(10, 132, 255, 0.15)', 
                     borderRadius: 12,
-                    whiteSpace: 'pre-line',
-                    maxHeight: 240,
+                    maxHeight: 280,
                     overflowY: 'auto',
                   }}
                 >
-                  {agentNarrative}
+                  <FormattedNarrative
+                    text={agentNarrative}
+                    onSelectNode={(nodeId) => {
+                      setSelectedNode({ node_id: nodeId })
+                      setEditMode(true)
+                      setRightSidebarOpen(true)
+                    }}
+                    onInspectSignalPlan={() => setSignalPlanFilter('all')}
+                  />
                 </div>
               ) : (
                 <div className="glass-card" style={{ padding: 12, borderRadius: 10, fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -520,19 +530,55 @@ export default function Dashboard() {
                 return (
                   <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {addCount > 0 && (
-                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(34,197,94,0.15)', color: '#86efac', border: '1px solid rgba(34,197,94,0.3)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setSignalPlanFilter('signal_add')}
+                        title="Click to inspect proposed new signal installations"
+                        style={{
+                          fontSize: 11, padding: '4px 10px', borderRadius: 20,
+                          background: 'rgba(34,197,94,0.18)', color: '#86efac',
+                          border: '1px solid rgba(34,197,94,0.35)', cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
                         ➕ {addCount} signal{addCount > 1 ? 's' : ''} to add
-                      </span>
+                        <span style={{ fontSize: 9, opacity: 0.8 }}>›</span>
+                      </button>
                     )}
                     {removeCount > 0 && (
-                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setSignalPlanFilter('signal_remove')}
+                        title="Click to inspect which signals are recommended for removal"
+                        style={{
+                          fontSize: 11, padding: '4px 10px', borderRadius: 20,
+                          background: 'rgba(239,68,68,0.18)', color: '#fca5a5',
+                          border: '1px solid rgba(239,68,68,0.35)', cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
                         🗑️ {removeCount} signal{removeCount > 1 ? 's' : ''} to remove
-                      </span>
+                        <span style={{ fontSize: 9, opacity: 0.8 }}>›</span>
+                      </button>
                     )}
                     {relocateCount > 0 && (
-                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(168,85,247,0.15)', color: '#d8b4fe', border: '1px solid rgba(168,85,247,0.3)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setSignalPlanFilter('signal_relocate')}
+                        title="Click to inspect signals recommended for relocation"
+                        style={{
+                          fontSize: 11, padding: '4px 10px', borderRadius: 20,
+                          background: 'rgba(168,85,247,0.18)', color: '#d8b4fe',
+                          border: '1px solid rgba(168,85,247,0.35)', cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
                         📍 {relocateCount} to relocate
-                      </span>
+                        <span style={{ fontSize: 9, opacity: 0.8 }}>›</span>
+                      </button>
                     )}
                   </div>
                 )
@@ -811,6 +857,22 @@ export default function Dashboard() {
           node={signalRelocateNode}
           onClose={() => setSignalRelocateNode(null)}
           onDone={() => loadDashboard(activeScenarioId)}
+        />
+      )}
+
+      {/* ── Signal Infrastructure & Planning Action Plan modal ─────────── */}
+      {signalPlanFilter && (
+        <SignalPlanModal
+          proposals={proposals}
+          initialFilter={signalPlanFilter}
+          onClose={() => setSignalPlanFilter(null)}
+          onSelectNode={(node) => {
+            setSelectedNode(node)
+            setEditMode(true)
+            setRightSidebarOpen(true)
+          }}
+          onSimulateIntersection={(node) => setIntersectionSimNode(node)}
+          onRelocateSignal={(node) => setSignalRelocateNode(node)}
         />
       )}
     </div>

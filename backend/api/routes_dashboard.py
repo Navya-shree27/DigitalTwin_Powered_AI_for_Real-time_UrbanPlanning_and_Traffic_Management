@@ -141,7 +141,8 @@ def get_dashboard(scenario_id: int, db: Session = Depends(get_db)) -> dict:
                 "low":      sum(1 for i in all_issues if i.severity == "low"),
             }
             all_proposals = db.query(Proposal).filter(Proposal.run_id == latest_done.id).all()
-            top_proposals = all_proposals[:10]
+            type_order = {"signal_remove": 0, "signal_add": 1, "signal_relocate": 2, "signal_timing": 3}
+            top_proposals = sorted(all_proposals, key=lambda p: type_order.get(p.type, 4))[:50]
             
             validated_proposals = []
             for p in all_proposals:
@@ -202,7 +203,8 @@ def get_dashboard(scenario_id: int, db: Session = Depends(get_db)) -> dict:
     }
 
     all_proposals = db.query(Proposal).filter(Proposal.run_id == run.id).all()
-    top_proposals = all_proposals[:10]
+    type_order = {"signal_remove": 0, "signal_add": 1, "signal_relocate": 2, "signal_timing": 3}
+    top_proposals = sorted(all_proposals, key=lambda p: type_order.get(p.type, 4))[:50]
 
     validated_proposals = []
     for p in all_proposals:
