@@ -73,6 +73,12 @@ export const scenariosApi = {
 
   serviceDetour: (scenarioId, nodeId, payload) =>
     api.post(`/scenarios/${scenarioId}/nodes/${nodeId}/service-detour`, payload),
+
+  simulateIntersection: (scenarioId, payload) =>
+    api.post(`/scenarios/${scenarioId}/simulate-intersection`, payload),
+
+  signalRelocate: (scenarioId, payload) =>
+    api.post(`/scenarios/${scenarioId}/signal-relocate`, payload),
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────

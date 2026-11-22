@@ -33,6 +33,10 @@ export default function Dashboard() {
   const [customSimLoading, setCustomSimLoading] = useState(false)
   const [simProgress, setSimProgress]     = useState(null)
 
+  // Modal state
+  const [intersectionSimNode, setIntersectionSimNode] = useState(null)
+  const [signalRelocateNode, setSignalRelocateNode] = useState(null)
+
   // Live Timer State
   const [simStartTime, setSimStartTime]           = useState(null)
   const [elapsedSeconds, setElapsedSeconds]       = useState(0)
@@ -441,26 +445,60 @@ export default function Dashboard() {
             />
           </div>
 
-          {isReady && agentNarrative && (
+          {isReady && (
             <div className="sidebar-section">
               <div className="sidebar-section-header">
-                <span className="sidebar-section-title">🤖 AI Agent Narrative</span>
+                <span className="sidebar-section-title">🤖 AI City Inspector</span>
               </div>
-              <div 
-                className="glass-card" 
-                style={{ 
-                  padding: 14, 
-                  fontSize: 12, 
-                  lineHeight: 1.6, 
-                  color: 'var(--text-secondary)', 
-                  background: 'rgba(10, 132, 255, 0.05)', 
-                  border: '1px solid rgba(10, 132, 255, 0.15)', 
-                  borderRadius: 12,
-                  whiteSpace: 'pre-line'
-                }}
-              >
-                {agentNarrative}
-              </div>
+              {agentNarrative ? (
+                <div 
+                  className="glass-card ai-narrative-card" 
+                  style={{ 
+                    padding: 14, 
+                    fontSize: 12, 
+                    lineHeight: 1.6, 
+                    color: 'var(--text-secondary)', 
+                    background: 'rgba(10, 132, 255, 0.05)', 
+                    border: '1px solid rgba(10, 132, 255, 0.15)', 
+                    borderRadius: 12,
+                    whiteSpace: 'pre-line',
+                    maxHeight: 220,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {agentNarrative}
+                </div>
+              ) : (
+                <div className="glass-card" style={{ padding: 12, borderRadius: 10, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  AI narrative will appear after the next simulation run (Ollama must be running).
+                </div>
+              )}
+              {/* Signal suggestion summary */}
+              {(() => {
+                const addCount = proposals.filter(p => p.type === 'signal_add').length
+                const removeCount = proposals.filter(p => p.type === 'signal_remove').length
+                const relocateCount = proposals.filter(p => p.type === 'signal_relocate').length
+                if (addCount + removeCount + relocateCount === 0) return null
+                return (
+                  <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {addCount > 0 && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(34,197,94,0.15)', color: '#86efac', border: '1px solid rgba(34,197,94,0.3)' }}>
+                        ➕ {addCount} signal{addCount > 1 ? 's' : ''} to add
+                      </span>
+                    )}
+                    {removeCount > 0 && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+                        🗑️ {removeCount} signal{removeCount > 1 ? 's' : ''} to remove
+                      </span>
+                    )}
+                    {relocateCount > 0 && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: 'rgba(168,85,247,0.15)', color: '#d8b4fe', border: '1px solid rgba(168,85,247,0.3)' }}>
+                        📍 {relocateCount} to relocate
+                      </span>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           )}
 
@@ -577,6 +615,8 @@ export default function Dashboard() {
                 setRightSidebarOpen(true)
               }
             }}
+            onSimulateIntersection={(node) => setIntersectionSimNode(node)}
+            onRelocateSignal={(node) => setSignalRelocateNode(node)}
             editMode={editMode}
             customTelemetry={customSimResult?.telemetry}
             leftSidebarOpen={leftSidebarOpen}
@@ -691,6 +731,8 @@ export default function Dashboard() {
                 customSimLoading={customSimLoading}
                 customSimResult={customSimResult}
                 scenarioId={activeScenarioId}
+                onSimulateIntersection={() => setIntersectionSimNode(selectedNode)}
+                onRelocateSignal={() => setSignalRelocateNode(selectedNode)}
                 onDetourData={(detour) => {
                   // Future: render detour GeoJSON overlays on MapView
                   console.log('[Detour Plan] Routes computed:', detour?.detour_routes?.length)
@@ -712,6 +754,25 @@ export default function Dashboard() {
           onClose={() => setShowNewScenario(false)}
           onCreate={handleCreateScenario}
           loading={loading}
+        />
+      )}
+
+      {/* ── Intersection Simulator modal ───────────────────────────────── */}
+      {intersectionSimNode && (
+        <IntersectionSimModal
+          scenarioId={activeScenarioId}
+          node={intersectionSimNode}
+          onClose={() => setIntersectionSimNode(null)}
+        />
+      )}
+
+      {/* ── Signal Relocate modal ──────────────────────────────────────── */}
+      {signalRelocateNode && (
+        <SignalRelocateModal
+          scenarioId={activeScenarioId}
+          node={signalRelocateNode}
+          onClose={() => setSignalRelocateNode(null)}
+          onDone={() => loadDashboard(activeScenarioId)}
         />
       )}
     </div>
@@ -995,7 +1056,9 @@ function SignalSandboxPanel({
   customSimResult,
   scenarioId,
   onClose,
-  onDetourData
+  onDetourData,
+  onSimulateIntersection,
+  onRelocateSignal,
 }) {
   const nodeId = selectedNode?.osmid
   const [green, setGreen] = useState(35)
@@ -1384,6 +1447,34 @@ function SignalSandboxPanel({
                   }}
                 >
                   {isSignal ? '🔴 Remove Signal' : '🟢 Install Signal'}
+                </button>
+              </div>
+
+              {/* Per-Intersection SUMO Sim & Relocate Actions */}
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => onSimulateIntersection?.()}
+                  style={{
+                    flex: 1, fontSize: 11, padding: '7px 8px', borderRadius: 8,
+                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)',
+                    color: '#60a5fa', fontWeight: 600, cursor: 'pointer', textAlign: 'center'
+                  }}
+                  title="Simulate this single junction with custom cars, bikes, and signal timings"
+                >
+                  🚦 Simulate in SUMO
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRelocateSignal?.()}
+                  style={{
+                    flex: 1, fontSize: 11, padding: '7px 8px', borderRadius: 8,
+                    background: 'rgba(168,85,247,0.15)', border: '1px solid rgba(168,85,247,0.4)',
+                    color: '#c084fc', fontWeight: 600, cursor: 'pointer', textAlign: 'center'
+                  }}
+                  title="Relocate this signal to new GPS coordinates"
+                >
+                  📍 Relocate Signal
                 </button>
               </div>
 
@@ -2050,4 +2141,262 @@ function SignalSandboxPanel({
 
 function round(val, dec) {
   return Number(val).toFixed(dec)
+}
+
+// ── IntersectionSimModal ──────────────────────────────────────────────────────
+
+function IntersectionSimModal({ scenarioId, node, onClose }) {
+  const [vehicleMix, setVehicleMix] = useState({ cars: 50, bikes: 20, autos: 10, trucks: 5, buses: 2 })
+  const [greenS, setGreenS] = useState(35)
+  const [amberS] = useState(3)
+  const [redS, setRedS] = useState(35)
+  const [durationS, setDurationS] = useState(300)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+
+  const handleSimulate = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const { scenariosApi: sApi } = await import('../services/apiClient.js')
+      const res = await sApi.simulateIntersection(scenarioId, {
+        node_id: String(node?.id || node?.properties?.osmid || 'unknown'),
+        lat: node?.lat || 0,
+        lon: node?.lon || 0,
+        green_s: greenS,
+        amber_s: amberS,
+        red_s: redS,
+        duration_s: durationS,
+        vehicle_mix: vehicleMix,
+      })
+      setResult(res.simulation)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const updateMix = (key, val) => setVehicleMix(prev => ({ ...prev, [key]: Number(val) }))
+  const totalVeh = Object.values(vehicleMix).reduce((a, b) => a + b, 0)
+
+  const metricColor = (val, good, bad) => {
+    if (val <= good) return '#86efac'
+    if (val >= bad) return '#f87171'
+    return '#fde68a'
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="modal-box glass-card" onClick={e => e.stopPropagation()} style={{ width: 540, maxHeight: '90vh', overflowY: 'auto', padding: 24, borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>🚦 Intersection Simulator</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              Node {node?.id || node?.properties?.osmid || 'Unknown'} · {node?.properties?.designation || node?.properties?.name || 'Intersection'}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+        </div>
+
+        {/* Vehicle Mix Sliders */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
+            🚗 Vehicle Mix — Total: <strong style={{ color: 'var(--accent-primary)' }}>{totalVeh}</strong>
+          </div>
+          {[
+            { key: 'cars', label: '🚗 Cars', max: 200 },
+            { key: 'bikes', label: '🏍️ Bikes/Mopeds', max: 150 },
+            { key: 'autos', label: '🛺 Auto-rickshaws', max: 100 },
+            { key: 'trucks', label: '🚛 Trucks', max: 50 },
+            { key: 'buses', label: '🚌 Buses', max: 30 },
+          ].map(({ key, label, max }) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, minWidth: 120, color: 'var(--text-secondary)' }}>{label}</span>
+              <input
+                type="range" min={0} max={max} value={vehicleMix[key]}
+                onChange={e => updateMix(key, e.target.value)}
+                style={{ flex: 1, accentColor: 'var(--accent-primary)' }}
+              />
+              <input
+                type="number" min={0} max={max} value={vehicleMix[key]}
+                onChange={e => updateMix(key, e.target.value)}
+                style={{ width: 50, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 6, padding: '2px 6px', fontSize: 12 }}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Signal Timing */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>⏱️ Signal Timing</div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            {[
+              { label: '🟢 Green (s)', val: greenS, set: setGreenS, min: 5, max: 120 },
+              { label: '🔴 Red (s)', val: redS, set: setRedS, min: 5, max: 120 },
+            ].map(({ label, val, set, min, max }) => (
+              <div key={label} style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+                <input
+                  type="number" min={min} max={max} value={val}
+                  onChange={e => set(Number(e.target.value))}
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
+                />
+              </div>
+            ))}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ Duration (s)</div>
+              <select
+                value={durationS} onChange={e => setDurationS(Number(e.target.value))}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
+              >
+                {[60, 120, 180, 300, 600].map(v => <option key={v} value={v}>{v}s</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6 }}>
+            Cycle: {greenS + amberS + redS}s · Amber: {amberS}s (fixed)
+          </div>
+        </div>
+
+        <button
+          className="btn btn-primary"
+          onClick={handleSimulate}
+          disabled={loading}
+          style={{ width: '100%', justifyContent: 'center', marginBottom: 16 }}
+        >
+          {loading ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }}/> Simulating…</> : '▶ Run Intersection Simulation'}
+        </button>
+
+        {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 12 }}>⚠ {error}</div>}
+
+        {result && (
+          <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, color: 'var(--accent-primary)' }}>
+              📊 Simulation Results — {result.engine === 'sumo' ? 'SUMO TraCI' : 'Webster Analytic Model'}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 12 }}>
+              {[
+                { label: 'Avg Wait Time', val: `${result.metrics?.avg_wait_time_s?.toFixed(1)}s`, raw: result.metrics?.avg_wait_time_s, good: 20, bad: 60 },
+                { label: 'Queue Length', val: `${result.metrics?.avg_queue_length?.toFixed(1) || '–'} veh`, raw: result.metrics?.avg_queue_length, good: 5, bad: 15 },
+                { label: 'Throughput', val: `${result.metrics?.throughput_veh} veh`, raw: null },
+                { label: 'Green Utilization', val: `${result.metrics?.green_utilization_pct?.toFixed(1)}%`, raw: null },
+                { label: 'Saturation (x)', val: result.metrics?.degree_of_saturation?.toFixed(3), raw: result.metrics?.degree_of_saturation, good: 0.5, bad: 0.85 },
+                { label: 'Emissions Proxy', val: `${result.metrics?.emissions_proxy?.toFixed(1)} gCO₂`, raw: null },
+              ].map(({ label, val, raw, good, bad }) => (
+                <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: raw != null ? metricColor(raw, good, bad) : 'white', marginTop: 2 }}>
+                    {val ?? '–'}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {result.interpretation && (
+              <div style={{ fontSize: 11, padding: '10px 12px', borderRadius: 8, background: 'rgba(10,132,255,0.08)', border: '1px solid rgba(10,132,255,0.2)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                💡 {result.interpretation}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── SignalRelocateModal ───────────────────────────────────────────────────────
+
+function SignalRelocateModal({ scenarioId, node, onClose, onDone }) {
+  const [proposedLat, setProposedLat] = useState(String(node?.lat || node?.geometry?.coordinates?.[1] || ''))
+  const [proposedLon, setProposedLon] = useState(String(node?.lon || node?.geometry?.coordinates?.[0] || ''))
+  const [reason, setReason] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState(null)
+
+  const currentLat = node?.lat || node?.geometry?.coordinates?.[1]
+  const currentLon = node?.lon || node?.geometry?.coordinates?.[0]
+  const nodeId = String(node?.id || node?.properties?.osmid || 'unknown')
+
+  const handleSubmit = async () => {
+    if (!proposedLat || !proposedLon) return
+    setLoading(true)
+    setError(null)
+    try {
+      const { scenariosApi: sApi } = await import('../services/apiClient.js')
+      await sApi.signalRelocate(scenarioId, {
+        node_id: nodeId,
+        current_lat: currentLat,
+        current_lon: currentLon,
+        proposed_lat: parseFloat(proposedLat),
+        proposed_lon: parseFloat(proposedLon),
+        reason,
+      })
+      setDone(true)
+      setTimeout(() => { onDone?.(); onClose() }, 1500)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="modal-box glass-card" onClick={e => e.stopPropagation()} style={{ width: 420, padding: 24, borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>📍 Relocate Signal</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16 }}>
+          Signal at node {nodeId} — current position: {currentLat?.toFixed(5)}, {currentLon?.toFixed(5)}
+        </div>
+
+        {[
+          { label: 'Proposed Latitude', val: proposedLat, set: setProposedLat, placeholder: '14.4678' },
+          { label: 'Proposed Longitude', val: proposedLon, set: setProposedLon, placeholder: '75.9145' },
+        ].map(({ label, val, set, placeholder }) => (
+          <div key={label} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>{label}</div>
+            <input
+              type="number" step="0.00001" value={val} placeholder={placeholder}
+              onChange={e => set(e.target.value)}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '8px 12px', fontSize: 13, boxSizing: 'border-box' }}
+            />
+          </div>
+        ))}
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Reason (optional)</div>
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="e.g. Better visibility, reduce pedestrian conflict..."
+            rows={2}
+            style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: 8, padding: '8px 12px', fontSize: 12, boxSizing: 'border-box', resize: 'vertical' }}
+          />
+        </div>
+
+        {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 12 }}>⚠ {error}</div>}
+
+        {done ? (
+          <div style={{ color: '#86efac', fontSize: 13, textAlign: 'center', padding: 10 }}>✅ Relocation proposal saved!</div>
+        ) : (
+          <button
+            className="btn btn-primary"
+            onClick={handleSubmit}
+            disabled={loading || !proposedLat || !proposedLon}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            {loading ? 'Saving…' : '📍 Submit Relocation Proposal'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }

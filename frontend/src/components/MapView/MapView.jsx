@@ -17,6 +17,8 @@ export default function MapView({
   isReady,
   selectedNode,
   onSelectNode,
+  onSimulateIntersection,
+  onRelocateSignal,
   scenario = null,
   editMode,
   customTelemetry,
@@ -1086,7 +1088,7 @@ export default function MapView({
                   border: `1px solid ${nodeIsSignal ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.25)'}`,
                   borderRadius: 8,
                   padding: '8px 10px',
-                  marginBottom: 12
+                  marginBottom: 10
                 }}>
                   <div style={{
                     fontSize: 11,
@@ -1099,6 +1101,28 @@ export default function MapView({
                   <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
                     {selectedNode.street_count}-approach {nodeIsSignal ? 'signal · IRC:106 phasing' : 'priority intersection'}
                   </div>
+                </div>
+
+                {/* Per-Intersection Simulation & Relocate Actions */}
+                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ flex: 1, fontSize: 11, padding: '5px 8px', justifyContent: 'center' }}
+                    onClick={() => onSimulateIntersection?.(selectedNode)}
+                    title="Run micro-simulation for this intersection in SUMO / Webster"
+                  >
+                    🚦 Simulate
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ flex: 1, fontSize: 11, padding: '5px 8px', justifyContent: 'center', border: '1px solid rgba(168,85,247,0.4)', color: '#d8b4fe' }}
+                    onClick={() => onRelocateSignal?.(selectedNode)}
+                    title="Change location or propose repositioning of this signal"
+                  >
+                    📍 Relocate
+                  </button>
                 </div>
 
                 <label className="toggle-container">

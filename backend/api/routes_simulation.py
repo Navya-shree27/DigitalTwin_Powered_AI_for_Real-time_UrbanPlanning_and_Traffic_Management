@@ -164,11 +164,13 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         from ai.issue_detection.congestion_detector import detect_congestion
         from ai.issue_detection.intersection_safety_analyzer import detect_unsafe_intersections
         from ai.issue_detection.lane_utilization_analyzer import detect_lane_issues
+        from ai.issue_detection.signal_placement_analyzer import detect_signal_placement_issues
 
         all_issues = (
             detect_congestion(telemetry) +
             detect_unsafe_intersections(telemetry) +
-            detect_lane_issues(telemetry)
+            detect_lane_issues(telemetry) +
+            detect_signal_placement_issues(telemetry)
         )
 
         # ── Fast DB Commit: Save baseline run telemetry ───────────────────────
@@ -216,11 +218,13 @@ def _run_full_pipeline(run_id: int, engine: str, duration_s: int, seed: int, sce
         from ai.proposal_generator.signal_timing_optimizer import generate_signal_proposals
         from ai.proposal_generator.lane_change_recommender import generate_lane_proposals
         from ai.proposal_generator.route_diversion_planner import generate_diversion_proposals
+        from ai.proposal_generator.signal_placement_proposer import generate_signal_placement_proposals
 
         all_proposals = (
             generate_signal_proposals(all_issues, telemetry) +
             generate_lane_proposals(all_issues, telemetry) +
-            generate_diversion_proposals(all_issues, telemetry)
+            generate_diversion_proposals(all_issues, telemetry) +
+            generate_signal_placement_proposals(all_issues, telemetry)
         )
 
         # ── Zoning analysis (runs after main proposals; non-blocking) ─────────
@@ -1031,6 +1035,107 @@ def plan_road_service_detour(
     except Exception as e:
         log.error(f"Service detour planning failed for node {node_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Per-intersection simulation ───────────────────────────────────────────────
+
+class IntersectionSimRequest(BaseModel):
+    node_id: str = Field(..., description="Node/intersection ID to simulate")
+    lat: float = Field(default=0.0)
+    lon: float = Field(default=0.0)
+    green_s: int = Field(default=35, ge=5, le=120)
+    amber_s: int = Field(default=3, ge=2, le=5)
+    red_s:   int = Field(default=35, ge=5, le=120)
+    duration_s: int = Field(default=300, ge=60, le=3600)
+    vehicle_mix: dict = Field(
+        default={"cars": 50, "bikes": 20, "autos": 10, "trucks": 5, "buses": 2},
+        description="Vehicle counts per type"
+    )
+
+
+@router.post("/{scenario_id}/simulate-intersection")
+def simulate_intersection_endpoint(
+    scenario_id: int,
+    body: IntersectionSimRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Run a per-intersection SUMO/analytic micro-simulation.
+    Returns detailed metrics: wait time, throughput, queue, saturation.
+    """
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from simulation.intersection_simulator import simulate_intersection
+    result = simulate_intersection(
+        node_id=body.node_id,
+        vehicle_mix=body.vehicle_mix,
+        green_s=body.green_s,
+        amber_s=body.amber_s,
+        red_s=body.red_s,
+        duration_s=body.duration_s,
+        lat=body.lat,
+        lon=body.lon,
+    )
+    return {"scenario_id": scenario_id, "simulation": result}
+
+
+# ── Signal Relocation Proposal ────────────────────────────────────────────────
+
+class SignalRelocateRequest(BaseModel):
+    node_id: str = Field(..., description="Current node/signal ID")
+    current_lat: float = Field(...)
+    current_lon: float = Field(...)
+    proposed_lat: float = Field(...)
+    proposed_lon: float = Field(...)
+    reason: str = Field(default="", description="Reason for relocation")
+
+
+@router.post("/{scenario_id}/signal-relocate")
+def signal_relocate(
+    scenario_id: int,
+    body: SignalRelocateRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Store a signal relocation proposal."""
+    from backend.models.schema import Proposal
+    import uuid, json
+
+    scenario = db.query(Scenario).get(scenario_id)
+    if not scenario:
+        raise HTTPException(404, f"Scenario {scenario_id} not found.")
+
+    from backend.api.routes_dashboard import _latest_done_run
+    baseline_run = _latest_done_run(scenario_id, db)
+    if not baseline_run:
+        raise HTTPException(400, "Please run a baseline simulation first.")
+
+    proposal = Proposal(
+        run_id=baseline_run.id,
+        proposal_id=f"sig_reloc_{body.node_id}_{uuid.uuid4().hex[:6]}",
+        type="signal_relocate",
+        subtype="signal_relocate",
+        description=(
+            f"Relocate signal at node {body.node_id} from "
+            f"({body.current_lat:.5f}, {body.current_lon:.5f}) to "
+            f"({body.proposed_lat:.5f}, {body.proposed_lon:.5f}). "
+            f"Reason: {body.reason or 'User-requested relocation'}"
+        ),
+        parameters_json=json.dumps({
+            "node_id": body.node_id,
+            "current_lat": body.current_lat,
+            "current_lon": body.current_lon,
+            "proposed_lat": body.proposed_lat,
+            "proposed_lon": body.proposed_lon,
+            "reason": body.reason,
+        }),
+        improvement_json=json.dumps({"expected_wait_reduction_pct": 10}),
+    )
+    db.add(proposal)
+    db.commit()
+    db.refresh(proposal)
+    return {"status": "ok", "proposal": proposal.to_dict()}
 
 
 
