@@ -14,6 +14,7 @@ const DAVANAGERE_CENTER = { lat: 14.4644, lon: 75.9218, zoom: 13 }
 export default function MapView({
   scenarioId,
   selectedIssue,
+  issues = [],
   isReady,
   selectedNode,
   onSelectNode,
@@ -33,6 +34,12 @@ export default function MapView({
   const mapRef = useRef(null)
   const [mapReady, setMapReady] = useState(false)
   const [mapError, setMapError] = useState(false)
+
+  const [showCongestionLayer, setShowCongestionLayer] = useState(true)
+  const [showHazardLayer, setShowHazardLayer] = useState(true)
+  const [showSignalsLayer, setShowSignalsLayer] = useState(true)
+  const [congestedCount, setCongestedCount] = useState(0)
+  const [hazardCount, setHazardCount] = useState(0)
 
   const [baselineTelemetry, setBaselineTelemetry] = useState(null)
   const [animating, setAnimating] = useState(false)
@@ -213,6 +220,22 @@ export default function MapView({
         }
         networkGeoJsonRef.current = networkCopy
 
+        // Safely add network-congestion-casing (bright red neon casing for jammed roads)
+        if (!map.getLayer('network-congestion-casing')) {
+          map.addLayer({
+            id: 'network-congestion-casing',
+            type: 'line',
+            source: 'network-source',
+            filter: ['==', ['get', 'traffic_status'], 'congested'],
+            paint: {
+              'line-color': '#ef4444',
+              'line-width': 8.5,
+              'line-blur': 2.5,
+              'line-opacity': 0.70
+            }
+          })
+        }
+
         // Safely add network-layer
         if (!map.getLayer('network-layer')) {
           map.addLayer({
@@ -221,20 +244,19 @@ export default function MapView({
             source: 'network-source',
             paint: {
               'line-width': [
-                'match',
-                ['get', 'lanes'],
-                1, 2.0,
-                2, 3.5,
-                3, 5.0,
-                4, 6.5,
-                3.0
+                'case',
+                ['==', ['get', 'traffic_status'], 'congested'], 4.5,
+                ['==', ['get', 'traffic_status'], 'moderate'], 3.6,
+                ['match', ['get', 'lanes'], 1, 2.0, 2, 3.2, 3, 4.5, 4, 6.0, 2.6]
               ],
               'line-color': [
                 'case',
+                ['==', ['get', 'traffic_status'], 'congested'], '#ef4444',
+                ['==', ['get', 'traffic_status'], 'moderate'], '#f59e0b',
                 ['==', ['get', 'widenable'], false], '#ef4444',
-                '#00d4aa'
+                '#10b981'
               ],
-              'line-opacity': 0.8
+              'line-opacity': 0.85
             }
           })
         }
@@ -416,6 +438,80 @@ export default function MapView({
         map.on('mouseenter', 'signals-layer', map._signalMouseEnterHandler)
         map.on('mouseleave', 'signals-layer', map._signalMouseLeaveHandler)
 
+        // ── Road edge click handler for traffic inspection ──────────────────
+        map.off('click', 'network-layer', map._edgeClickHandler)
+        map.off('mouseenter', 'network-layer', map._edgeMouseEnterHandler)
+        map.off('mouseleave', 'network-layer', map._edgeMouseLeaveHandler)
+
+        map._edgeClickHandler = (e) => {
+          if (!e.features || e.features.length === 0) return
+          const p = e.features[0].properties
+          const coords = e.lngLat
+
+          const roadType = (p.road_type || p.highway || 'Urban Road').replace(/_/g, ' ')
+          const speedSim = p.speed_sim ? `${Number(p.speed_sim).toFixed(1)} km/h` : '–'
+          const speedFf = p.speed_kph ? `${Number(p.speed_kph).toFixed(0)} km/h` : '40 km/h'
+          const flow = p.flow ? `${Number(p.flow).toFixed(0)} veh/h` : '–'
+          const occ = p.occupancy ? `${(Number(p.occupancy) * 100).toFixed(0)}%` : '–'
+          const statusLabel = p.traffic_status === 'congested'
+            ? '🔴 Severe Congestion'
+            : (p.traffic_status === 'moderate' ? '🟡 Moderate Traffic' : '🟢 Free Flow')
+
+          const popupContent = document.createElement('div')
+          popupContent.style.cssText = 'padding: 4px; font-family: system-ui, sans-serif; min-width: 200px;'
+          popupContent.innerHTML = `
+            <div style="font-weight: 700; font-size: 13px; color: #fff; text-transform: capitalize; margin-bottom: 4px;">
+              ${roadType} Corridor
+            </div>
+            <div style="font-size: 11px; margin-bottom: 8px;">
+              <span>${statusLabel}</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;">
+              <div style="display: flex; justify-content: space-between;">
+                <span style="color: #94a3b8;">Speed:</span>
+                <strong>${speedSim} / ${speedFf}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <span style="color: #94a3b8;">Flow:</span>
+                <strong>${flow}</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <span style="color: #94a3b8;">Occupancy:</span>
+                <strong>${occ}</strong>
+              </div>
+            </div>
+            ${p.u ? `
+              <button id="edge-stress-btn" style="width: 100%; padding: 5px 8px; border-radius: 6px; background: #3b82f6; color: white; border: none; font-size: 11px; font-weight: 600; cursor: pointer;">
+                ⚡ Stress Test Intersection (Node ${p.u})
+              </button>
+            ` : ''}
+          `
+
+          popupContent.querySelector('#edge-stress-btn')?.addEventListener('click', () => {
+            onSimulateIntersection?.({ id: p.u, osmid: p.u, properties: { osmid: p.u } })
+            issuePopupRef.current?.remove()
+          })
+
+          import('maplibre-gl').then(ml => {
+            if (issuePopupRef.current) {
+              issuePopupRef.current.remove()
+              issuePopupRef.current = null
+            }
+            const pop = new ml.default.Popup({ offset: 8, closeButton: true, className: 'issue-map-popup' })
+              .setLngLat(coords)
+              .setDOMContent(popupContent)
+              .addTo(map)
+            issuePopupRef.current = pop
+          })
+        }
+
+        map._edgeMouseEnterHandler = () => { map.getCanvas().style.cursor = 'pointer' }
+        map._edgeMouseLeaveHandler = () => { map.getCanvas().style.cursor = '' }
+
+        map.on('click', 'network-layer', map._edgeClickHandler)
+        map.on('mouseenter', 'network-layer', map._edgeMouseEnterHandler)
+        map.on('mouseleave', 'network-layer', map._edgeMouseLeaveHandler)
+
         // Zoom map to fit signals bounds
         if (signalFeatures && signalFeatures.length > 0) {
           const lons = signalFeatures.map(f => f.geometry.coordinates[0])
@@ -529,6 +625,282 @@ export default function MapView({
   const nodeOverride = selectedNode ? signalOverrides?.[selectedNode.osmid] : null
   const isNodeOriginallySignal = selectedNode?.highway === 'traffic_signals'
   const nodeIsSignal = nodeOverride ? (nodeOverride.is_signal !== false) : isNodeOriginallySignal
+
+  // ── Sync Telemetry (Congestion & Collision Hazards) to Map Layers ──────────
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    // 1. Update network edges with live traffic congestion
+    if (activeTelemetry?.edges && geoJsonCacheRef.current?.network?.features) {
+      const edgeMap = {}
+      activeTelemetry.edges.forEach(e => {
+        edgeMap[e.edge_id] = e
+        edgeMap[`${e.u}_${e.v}`] = e
+        edgeMap[`${e.v}_${e.u}`] = e
+      })
+
+      let cCount = 0
+      const updatedNetFeatures = geoJsonCacheRef.current.network.features.map(feat => {
+        const p = feat.properties || {}
+        const eid = p.edge_id || `${p.u}_${p.v}_${p.k || 0}`
+        const altEid = `${p.u}_${p.v}`
+        const t = edgeMap[eid] || edgeMap[altEid]
+        let traffic_status = 'free_flow'
+        let speed_sim = p.speed_kph || 40
+        let occupancy = 0.0
+        let flow = 0.0
+
+        if (t) {
+          speed_sim = t.speed_sim
+          occupancy = t.occupancy
+          flow = t.flow
+          const ff = t.speed_kph || p.speed_kph || 40
+          const speedRatio = ff > 0 ? (speed_sim / ff) : 1.0
+
+          if (occupancy >= 0.65 || speedRatio <= 0.45 || (t.wait_time > 15 && speedRatio <= 0.55)) {
+            traffic_status = 'congested'
+            cCount++
+          } else if (occupancy >= 0.35 || speedRatio <= 0.70) {
+            traffic_status = 'moderate'
+          }
+        }
+
+        return {
+          ...feat,
+          properties: {
+            ...p,
+            traffic_status,
+            speed_sim,
+            occupancy,
+            flow,
+            wait_time: t?.wait_time || 0,
+          }
+        }
+      })
+
+      setCongestedCount(cCount)
+      if (map.getSource('network-source')) {
+        map.getSource('network-source').setData({
+          type: 'FeatureCollection',
+          features: updatedNetFeatures
+        })
+      }
+    }
+
+    // 2. Build Collision & Safety Hazards GeoJSON
+    const hazardFeatures = []
+    const seenNodeIds = new Set()
+
+    if (activeTelemetry?.nodes) {
+      activeTelemetry.nodes.forEach(n => {
+        const conflict = Number(n.conflict_rate || 0)
+        const risk = Number(n.collision_risk_score || 0)
+        const wait = Number(n.avg_wait_time || 0)
+        if ((conflict >= 1.0 || risk >= 0.25 || wait >= 35) && n.lat && n.lon) {
+          const nid = String(n.node_id)
+          seenNodeIds.add(nid)
+          hazardFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [n.lon, n.lat] },
+            properties: {
+              node_id: n.node_id,
+              conflict_rate: conflict,
+              collision_risk_pct: Math.round(risk * 100),
+              avg_wait_time: wait,
+              street_count: n.street_count || 4,
+              is_signal: !!n.is_signal,
+              designation: n.designation || (n.is_signal ? 'Signalized Intersection' : 'Uncontrolled Priority Crossing'),
+            }
+          })
+        }
+      })
+    }
+
+    if (issues && Array.isArray(issues)) {
+      issues.filter(i => i.type === 'intersection_safety').forEach(i => {
+        const loc = i.location || {}
+        const nid = String(loc.node_id || '')
+        if (loc.lat && loc.lon && !seenNodeIds.has(nid)) {
+          seenNodeIds.add(nid)
+          const m = i.metrics || {}
+          hazardFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [loc.lon, loc.lat] },
+            properties: {
+              node_id: loc.node_id,
+              conflict_rate: Number(m.conflict_rate || 1.8),
+              collision_risk_pct: m.collision_risk_score ? Math.round(m.collision_risk_score * 100) : 65,
+              avg_wait_time: Number(m.avg_wait_time || 25),
+              street_count: Number(m.street_count || 4),
+              is_signal: false,
+              designation: i.description || 'Unsafe Crossing Blackspot',
+            }
+          })
+        }
+      })
+    }
+
+    setHazardCount(hazardFeatures.length)
+    const hazardGeoJson = { type: 'FeatureCollection', features: hazardFeatures }
+
+    if (map.getSource('collision-hazards-source')) {
+      map.getSource('collision-hazards-source').setData(hazardGeoJson)
+    } else {
+      map.addSource('collision-hazards-source', {
+        type: 'geojson',
+        data: hazardGeoJson
+      })
+
+      if (!map.getLayer('hazard-pulse-layer')) {
+        map.addLayer({
+          id: 'hazard-pulse-layer',
+          type: 'circle',
+          source: 'collision-hazards-source',
+          paint: {
+            'circle-radius': 16,
+            'circle-color': ['case', ['>=', ['get', 'collision_risk_pct'], 60], '#ef4444', '#f97316'],
+            'circle-opacity': 0.35,
+            'circle-stroke-width': 0
+          }
+        })
+      }
+
+      if (!map.getLayer('hazard-marker-layer')) {
+        map.addLayer({
+          id: 'hazard-marker-layer',
+          type: 'circle',
+          source: 'collision-hazards-source',
+          paint: {
+            'circle-radius': 8,
+            'circle-color': ['case', ['>=', ['get', 'collision_risk_pct'], 60], '#ef4444', '#f97316'],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+            'circle-opacity': 1.0
+          }
+        })
+      }
+
+      if (!map.getLayer('hazard-icon-layer')) {
+        map.addLayer({
+          id: 'hazard-icon-layer',
+          type: 'symbol',
+          source: 'collision-hazards-source',
+          layout: {
+            'text-field': '⚠️',
+            'text-size': 12,
+            'text-allow-overlap': true,
+            'text-offset': [0, -1.2]
+          }
+        })
+      }
+
+      map.on('click', 'hazard-marker-layer', (e) => {
+        if (!e.features || e.features.length === 0) return
+        const p = e.features[0].properties
+        const coords = e.features[0].geometry.coordinates.slice()
+
+        if (issuePopupRef.current) {
+          issuePopupRef.current.remove()
+          issuePopupRef.current = null
+        }
+
+        const popupContent = document.createElement('div')
+        popupContent.style.cssText = 'padding: 4px; font-family: system-ui, sans-serif; min-width: 220px;'
+        popupContent.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <span style="font-size: 16px;">⚠️</span>
+            <strong style="font-size: 13px; color: #f87171;">Collision Hazard Hotspot</strong>
+          </div>
+          <div style="font-size: 11px; color: #94a3b8; margin-bottom: 8px;">
+            Node ${p.node_id} · ${p.street_count}-way ${p.is_signal ? 'Signal' : 'Uncontrolled Crossing'}
+          </div>
+          <div style="background: rgba(255,255,255,0.06); border-radius: 8px; padding: 8px; font-size: 11px; margin-bottom: 10px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span style="color: #94a3b8;">Collision Risk:</span>
+              <strong style="color: #ef4444;">${p.collision_risk_pct}%</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span style="color: #94a3b8;">Conflict Rate:</span>
+              <strong style="color: #f59e0b;">${p.conflict_rate} /hr</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: #94a3b8;">Average Wait:</span>
+              <strong style="color: #e2e8f0;">${p.avg_wait_time}s</strong>
+            </div>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button id="hazard-popup-stress" style="flex: 1; padding: 5px 8px; border-radius: 6px; background: #ef4444; color: white; border: none; font-size: 11px; font-weight: 700; cursor: pointer;">
+              ⚡ Stress Test
+            </button>
+            <button id="hazard-popup-sandbox" style="flex: 1; padding: 5px 8px; border-radius: 6px; background: rgba(255,255,255,0.1); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.2); font-size: 11px; font-weight: 600; cursor: pointer;">
+              🛠️ Sandbox
+            </button>
+          </div>
+        `
+
+        popupContent.querySelector('#hazard-popup-stress')?.addEventListener('click', () => {
+          onSimulateIntersection?.({
+            id: p.node_id,
+            osmid: p.node_id,
+            lat: coords[1],
+            lon: coords[0],
+            street_count: p.street_count,
+            properties: { osmid: p.node_id, street_count: p.street_count, highway: p.is_signal ? 'traffic_signals' : undefined }
+          })
+          issuePopupRef.current?.remove()
+        })
+
+        popupContent.querySelector('#hazard-popup-sandbox')?.addEventListener('click', () => {
+          onSelectNode?.({
+            id: p.node_id,
+            osmid: p.node_id,
+            lat: coords[1],
+            lon: coords[0],
+            street_count: p.street_count,
+            properties: { osmid: p.node_id, street_count: p.street_count, highway: p.is_signal ? 'traffic_signals' : undefined }
+          })
+          issuePopupRef.current?.remove()
+        })
+
+        import('maplibre-gl').then(ml => {
+          const pop = new ml.default.Popup({ offset: 12, closeButton: true, className: 'issue-map-popup' })
+            .setLngLat(coords)
+            .setDOMContent(popupContent)
+            .addTo(map)
+          issuePopupRef.current = pop
+        })
+      })
+
+      map.on('mouseenter', 'hazard-marker-layer', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'hazard-marker-layer', () => { map.getCanvas().style.cursor = '' })
+    }
+  }, [activeTelemetry, mapReady, issues])
+
+  // ── Toggle Map Layer Visibility ───────────────────────────────────────────
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    if (map.getLayer('network-congestion-casing')) {
+      map.setLayoutProperty('network-congestion-casing', 'visibility', showCongestionLayer ? 'visible' : 'none')
+    }
+    if (map.getLayer('hazard-pulse-layer')) {
+      map.setLayoutProperty('hazard-pulse-layer', 'visibility', showHazardLayer ? 'visible' : 'none')
+    }
+    if (map.getLayer('hazard-marker-layer')) {
+      map.setLayoutProperty('hazard-marker-layer', 'visibility', showHazardLayer ? 'visible' : 'none')
+    }
+    if (map.getLayer('hazard-icon-layer')) {
+      map.setLayoutProperty('hazard-icon-layer', 'visibility', showHazardLayer ? 'visible' : 'none')
+    }
+    if (map.getLayer('signals-halo-layer')) {
+      map.setLayoutProperty('signals-halo-layer', 'visibility', showSignalsLayer ? 'visible' : 'none')
+    }
+    if (map.getLayer('signals-layer')) {
+      map.setLayoutProperty('signals-layer', 'visibility', showSignalsLayer ? 'visible' : 'none')
+    }
+  }, [showCongestionLayer, showHazardLayer, showSignalsLayer, mapReady])
 
   // ── Local Signal State for Close-up Animation ──────────────────────────────
   const [activeGreenEdgeId, setActiveGreenEdgeId] = useState(null)
@@ -1233,20 +1605,95 @@ export default function MapView({
         <div ref={mapContainer} className="map-container" />
       )}
 
-      {/* Overlay info */}
+      {/* Overlay info & Layer Toggles */}
       {isReady && (
         <div className={`map-overlay-tl ${leftSidebarOpen ? 'sidebar-open' : ''}`}>
-          <div className="map-chip">🗺 {scenario?.city || scenario?.name || 'Road Network'}</div>
-          {selectedIssue && (
-            <div className="map-chip map-chip-issue">
-              📍 {selectedIssue.type?.replace(/_/g, ' ')} — {selectedIssue.severity}
-            </div>
-          )}
-          {selectedNode && (
-            <div className="map-chip map-chip-node">
-              🚦 Sandbox Node: {selectedNode.osmid}
-            </div>
-          )}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="map-chip">🗺 {scenario?.city || scenario?.name || 'Road Network'}</div>
+            {selectedIssue && (
+              <div className="map-chip map-chip-issue">
+                📍 {selectedIssue.type?.replace(/_/g, ' ')} — {selectedIssue.severity}
+              </div>
+            )}
+            {selectedNode && (
+              <div className="map-chip map-chip-node">
+                🚦 Sandbox Node: {selectedNode.osmid}
+              </div>
+            )}
+          </div>
+
+          {/* Interactive Layer Toggles: Traffic Congestion, Collision Hazards, Signals */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+            <button
+              type="button"
+              onClick={() => setShowCongestionLayer(prev => !prev)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 20,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: showCongestionLayer ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 0, 0, 0.6)',
+                border: showCongestionLayer ? '1px solid #ef4444' : '1px solid rgba(255, 255, 255, 0.15)',
+                color: showCongestionLayer ? '#fca5a5' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+              title="Toggle Traffic Congestion Visualization"
+            >
+              <span>🔴 Traffic Congestion</span>
+              {congestedCount > 0 && (
+                <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
+                  {congestedCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowHazardLayer(prev => !prev)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 20,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: showHazardLayer ? 'rgba(249, 115, 22, 0.25)' : 'rgba(0, 0, 0, 0.6)',
+                border: showHazardLayer ? '1px solid #f97316' : '1px solid rgba(255, 255, 255, 0.15)',
+                color: showHazardLayer ? '#fdba74' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+              title="Toggle Collision Hazard Blackspots"
+            >
+              <span>⚠️ Collision Hazards</span>
+              {hazardCount > 0 && (
+                <span style={{ background: '#f97316', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
+                  {hazardCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowSignalsLayer(prev => !prev)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 20,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: showSignalsLayer ? 'rgba(59, 130, 246, 0.25)' : 'rgba(0, 0, 0, 0.6)',
+                border: showSignalsLayer ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                color: showSignalsLayer ? '#93c5fd' : 'var(--text-muted)',
+              }}
+              title="Toggle Traffic Signals Layer"
+            >
+              🚦 Signals
+            </button>
+          </div>
         </div>
       )}
 

@@ -2,8 +2,8 @@ import React, { useState } from 'react'
 import './IssueList.css'
 
 const TYPE_LABELS = {
-  congestion:           'Congestion',
-  intersection_safety:  'Intersection',
+  congestion:           'Traffic Congestion',
+  intersection_safety:  'Collision & Safety Hazards',
   lane_utilization:     'Lane Usage',
 }
 const TYPE_ICONS = {
@@ -44,15 +44,18 @@ export default function IssueList({
 
       {/* Type filter */}
       <div className="type-filter-row">
-        {['all', 'congestion', 'intersection_safety', 'lane_utilization'].map(t => (
-          <button
-            key={t}
-            className={`type-filter-btn ${typeFilter === t ? 'active' : ''}`}
-            onClick={() => setTypeFilter(t)}
-          >
-            {t === 'all' ? 'All types' : TYPE_ICONS[t] + ' ' + (TYPE_LABELS[t] || t)}
-          </button>
-        ))}
+        {['all', 'congestion', 'intersection_safety', 'lane_utilization'].map(t => {
+          const count = t === 'all' ? issues.length : issues.filter(i => i.type === t).length
+          return (
+            <button
+              key={t}
+              className={`type-filter-btn ${typeFilter === t ? 'active' : ''}`}
+              onClick={() => setTypeFilter(t)}
+            >
+              {t === 'all' ? `All (${count})` : `${TYPE_ICONS[t]} ${TYPE_LABELS[t] || t} (${count})`}
+            </button>
+          )
+        })}
       </div>
 
       {/* Issue items */}

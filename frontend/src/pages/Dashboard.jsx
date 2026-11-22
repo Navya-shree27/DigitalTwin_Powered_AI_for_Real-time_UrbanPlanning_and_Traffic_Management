@@ -708,6 +708,7 @@ export default function Dashboard() {
             scenarioId={activeScenarioId}
             scenario={scenario}
             selectedIssue={selectedIssue}
+            issues={issues}
             isReady={isReady}
             selectedNode={selectedNode}
             onSelectNode={(node) => {
