@@ -111,7 +111,7 @@ def _build_analysis_prompt(
     Duration: {telemetry.get('duration_s', 'N/A')}s
     Generated: {telemetry.get('generated_at', 'N/A')}
 
-    --- NETWORK SUMMARY ---
+    --- GROUND TRUTH CURRENT NETWORK METRICS ---
     Total edges: {len(edges)}
     Average simulated speed: {summary.get('avg_speed_kph', 0):.1f} km/h
     Average travel time: {summary.get('avg_travel_time_s', 0):.1f}s
@@ -133,12 +133,18 @@ def _build_analysis_prompt(
     Issue details:
     {issues_text}
 
-    --- PRIOR CYCLE MEMORY ---
+    --- PRIOR CYCLE MEMORY (HISTORICAL ONLY - DO NOT REPEAT AS CURRENT METRICS) ---
     {prior_summary}
 
     === YOUR TASK ===
-    Based on the above simulation data:
+    Based STRICTLY on the current simulation data above:
     1. Summarize the overall traffic health of this network in 2-3 sentences.
+       MANDATORY: You MUST accurately report the current metrics:
+       - Average speed: {summary.get('avg_speed_kph', 0):.1f} km/h
+       - Average wait time: {summary.get('avg_wait_time_s', 0):.1f}s
+       - Network congestion: {summary.get('congestion_ratio', 0):.1%} ({summary.get('congested_edges', 0)} congested edges)
+       - Severe safety/bottleneck issues: {len(severe)}
+       NEVER fabricate numbers or copy numbers from the historical memory.
     2. Provide an explicit section titled '### 🚦 Traffic Signal Infrastructure & Placement Plan':
        - Specify each intersection node where new signals must be placed, and explain why.
        - Specify underloaded signals that should be removed or replaced with yield/stop signs to prevent stopping delay.

@@ -2,18 +2,6 @@
   "1": [
     {
       "scenario_id": 1,
-      "cycle": 2,
-      "timestamp": "2026-06-25T15:38:45.565841+00:00",
-      "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: MODERATE\n\u2022 Average speed: 28.2 km/h | Average wait: 2.9s\n\u2022 Congestion ratio: 19.3% (8852 congested edges)\n\u2022 Severe issues detected: 3768\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1690250001_5306415337_0 (primary). Sim\u2026",
-      "key_metrics": {
-        "avg_speed_kph": 28.24,
-        "avg_travel_time_s": 26.56,
-        "congestion_ratio": 0.1931,
-        "severe_issues": 3768
-      }
-    },
-    {
-      "scenario_id": 1,
       "cycle": 3,
       "timestamp": "2026-07-09T21:42:28.922950+00:00",
       "summary": "[Rule-based summary \u2014 no LLM API key configured]\n\nNetwork health: MODERATE\n\u2022 Average speed: 28.2 km/h | Average wait: 2.9s\n\u2022 Congestion ratio: 19.4% (8879 congested edges)\n\u2022 Severe issues detected: 3697\n\nTop issues:\n  1. [congestion] Congestion detected on edge 1690250001_5306415337_0 (primary). Sim\u2026",
@@ -86,33 +74,33 @@
     },
     {
       "scenario_id": 1,
-      "cycle": 9,
-      "timestamp": "2026-11-22T11:55:24.008114+00:00",
-      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and no wait times, indicating efficient traffic flow. However, a closer examination reveals 5 congested edges, suggesting potential bottlenecks that require\u2026",
-      "key_metrics": {
-        "avg_speed_kph": 18.5,
-        "avg_travel_time_s": 18.66,
-        "congestion_ratio": 0.8634,
-        "severe_issues": 11989
-      }
-    },
-    {
-      "scenario_id": 1,
-      "cycle": 10,
-      "timestamp": "2026-11-22T12:00:07.511419+00:00",
-      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 18.5 km/h and average travel times of 18.7s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected,\u2026",
-      "key_metrics": {
-        "avg_speed_kph": 18.5,
-        "avg_travel_time_s": 18.66,
-        "congestion_ratio": 0.8634,
-        "severe_issues": 133
-      }
-    },
-    {
-      "scenario_id": 1,
       "cycle": 11,
       "timestamp": "2026-11-22T12:13:30.872786+00:00",
       "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 18.5 km/h and average travel times of 18.7s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected,\u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.95,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0006,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 12,
+      "timestamp": "2026-11-22T12:20:33.386196+00:00",
+      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and average travel times of 9.6s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected, \u2026",
+      "key_metrics": {
+        "avg_speed_kph": 27.95,
+        "avg_travel_time_s": 9.55,
+        "congestion_ratio": 0.0006,
+        "severe_issues": 3
+      }
+    },
+    {
+      "scenario_id": 1,
+      "cycle": 13,
+      "timestamp": "2026-11-22T12:27:58.627979+00:00",
+      "summary": "**Summary of Overall Traffic Health:**\nThe Davanagere network exhibits a relatively healthy traffic profile, with an average speed of 27.9 km/h and average travel times of 9.6s, indicating efficient traffic flow. However, 86.3% of the edges are congested, and 119 severe safety issues were detected, \u2026",
       "key_metrics": {
         "avg_speed_kph": 27.95,
         "avg_travel_time_s": 9.55,
