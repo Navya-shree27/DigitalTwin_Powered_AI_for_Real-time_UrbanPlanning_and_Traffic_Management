@@ -44,6 +44,7 @@ export default function MapView({
   const particlesRef = useRef([])
   const animationFrameIdRef = useRef(null)
   const lastTimeRef = useRef(performance.now())
+  const issuePopupRef = useRef(null)
 
   // ── Initialize MapLibre GL ────────────────────────────────────────────────
   useEffect(() => {
@@ -1009,14 +1010,200 @@ export default function MapView({
     }
   }, [signalOverrides, mapReady])
 
-  // ── Fly to selected issue location ────────────────────────────────────────
+  // ── Fly to & highlight selected issue location ──────────────────────────
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !selectedIssue) return
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    // Clean up prior issue popup
+    if (issuePopupRef.current) {
+      issuePopupRef.current.remove()
+      issuePopupRef.current = null
+    }
+
+    if (!selectedIssue) {
+      if (map.getSource('selected-issue-source')) {
+        map.getSource('selected-issue-source').setData({ type: 'FeatureCollection', features: [] })
+      }
+      return
+    }
+
     const loc = selectedIssue.location || {}
-    const lat = loc.lat
-    const lon = loc.lon
-    if (lat && lon) {
-      mapRef.current.flyTo({ center: [lon, lat], zoom: 15, speed: 1.4, curve: 1 })
+    let targetLon = loc.lon != null ? Number(loc.lon) : null
+    let targetLat = loc.lat != null ? Number(loc.lat) : null
+    let highlightGeoJson = null
+
+    // 1. Direct point coordinate (e.g. intersection safety)
+    if (targetLat != null && targetLon != null && !isNaN(targetLat) && !isNaN(targetLon) && targetLat !== 0) {
+      highlightGeoJson = {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [targetLon, targetLat] },
+          properties: { ...selectedIssue }
+        }]
+      }
+    } else {
+      // 2. Resolve edge coordinates from network GeoJSON
+      const edgeId = loc.edge_id
+      const u = loc.node_u != null ? String(loc.node_u) : (loc.u != null ? String(loc.u) : null)
+      const v = loc.node_v != null ? String(loc.node_v) : (loc.v != null ? String(loc.v) : null)
+
+      const netFeatures = geoJsonCacheRef.current?.network?.features || []
+      const matchedEdge = netFeatures.find(f => {
+        const p = f.properties || {}
+        const pEdgeId = p.edge_id || p.id
+        const pU = String(p.u || '')
+        const pV = String(p.v || '')
+        if (edgeId && (pEdgeId === edgeId || String(pEdgeId).startsWith(String(edgeId)))) return true
+        if (u && v && ((pU === u && pV === v) || (pU === v && pV === u))) return true
+        return false
+      })
+
+      if (matchedEdge && matchedEdge.geometry?.coordinates) {
+        highlightGeoJson = {
+          type: 'FeatureCollection',
+          features: [matchedEdge]
+        }
+        const coords = matchedEdge.geometry.coordinates
+        if (coords.length > 0) {
+          const midIdx = Math.floor(coords.length / 2)
+          targetLon = coords[midIdx][0]
+          targetLat = coords[midIdx][1]
+        }
+      } else if (u || loc.node_id) {
+        const targetNodeId = String(u || loc.node_id)
+        const nodeFeatures = geoJsonCacheRef.current?.nodes?.features || []
+        const matchedNode = nodeFeatures.find(f => String(f.properties?.osmid || f.properties?.id) === targetNodeId)
+        if (matchedNode && matchedNode.geometry?.coordinates) {
+          targetLon = matchedNode.geometry.coordinates[0]
+          targetLat = matchedNode.geometry.coordinates[1]
+          highlightGeoJson = {
+            type: 'FeatureCollection',
+            features: [matchedNode]
+          }
+        }
+      }
+    }
+
+    // Ensure highlight source and layers exist
+    if (!map.getSource('selected-issue-source')) {
+      map.addSource('selected-issue-source', {
+        type: 'geojson',
+        data: highlightGeoJson || { type: 'FeatureCollection', features: [] }
+      })
+
+      map.addLayer({
+        id: 'selected-issue-line-layer',
+        type: 'line',
+        source: 'selected-issue-source',
+        filter: ['==', '$type', 'LineString'],
+        paint: {
+          'line-color': '#f43f5e',
+          'line-width': 8,
+          'line-opacity': 0.95,
+          'line-blur': 1
+        }
+      })
+
+      map.addLayer({
+        id: 'selected-issue-point-layer',
+        type: 'circle',
+        source: 'selected-issue-source',
+        filter: ['==', '$type', 'Point'],
+        paint: {
+          'circle-radius': 14,
+          'circle-color': '#f43f5e',
+          'circle-stroke-width': 3,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.95
+        }
+      })
+    } else if (highlightGeoJson) {
+      map.getSource('selected-issue-source').setData(highlightGeoJson)
+    }
+
+    // Fly camera smoothly to target
+    if (targetLat != null && targetLon != null && !isNaN(targetLat) && !isNaN(targetLon) && targetLat !== 0) {
+      map.flyTo({ center: [targetLon, targetLat], zoom: 16.5, speed: 1.4, curve: 1.2 })
+
+      // Create interactive MapLibre popup over the road/junction
+      import('maplibre-gl').then(maplibregl => {
+        const m = selectedIssue.metrics || {}
+        const speedStr = m.speed_kph != null ? `${Number(m.speed_kph).toFixed(1)} km/h` : 'N/A'
+        const ffStr = m.free_flow_kph != null ? `${Number(m.free_flow_kph).toFixed(1)} km/h` : '30 km/h'
+        const occStr = m.occupancy != null ? `${(Number(m.occupancy) * 100).toFixed(0)}%` : 'N/A'
+
+        const targetNodeId = String(
+          loc.node_u || loc.node_id || (loc.edge_id ? loc.edge_id.split('_')[0] : '')
+        )
+
+        const popupNode = document.createElement('div')
+        popupNode.style.background = '#0f172a'
+        popupNode.style.color = '#f8fafc'
+        popupNode.style.padding = '12px 14px'
+        popupNode.style.borderRadius = '10px'
+        popupNode.style.fontSize = '11.5px'
+        popupNode.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.6)'
+        popupNode.style.minWidth = '230px'
+        popupNode.style.border = '1px solid rgba(244,63,94,0.4)'
+
+        popupNode.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-weight:700; color:#f43f5e; text-transform:uppercase; font-size:11px;">
+              🚗 ${selectedIssue.type || 'Issue'} · ${selectedIssue.severity || 'Notice'}
+            </span>
+            <span style="font-size:10px; color:#94a3b8; font-family:monospace;">
+              ${targetNodeId ? '#' + targetNodeId : ''}
+            </span>
+          </div>
+          <div style="font-size:11px; color:#cbd5e1; line-height:1.45; margin-bottom:8px;">
+            Speed: <b style="color:#f8fafc">${speedStr}</b> vs <span style="color:#94a3b8">${ffStr}</span><br/>
+            Occupancy: <b style="color:${Number(m.occupancy) > 0.5 ? '#ef4444' : '#38bdf8'}">${occStr}</b>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="popup-stress-btn" style="flex:1; background:rgba(239,68,68,0.25); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; border-radius:5px; padding:5px 8px; font-size:10.5px; font-weight:600; cursor:pointer;">
+              ⚡ Stress Test
+            </button>
+            <button id="popup-sandbox-btn" style="flex:1; background:rgba(56,189,248,0.25); border:1px solid rgba(56,189,248,0.4); color:#7dd3fc; border-radius:5px; padding:5px 8px; font-size:10.5px; font-weight:600; cursor:pointer;">
+              🛠️ Sandbox
+            </button>
+          </div>
+        `
+
+        const popup = new maplibregl.default.Popup({ offset: 15, closeButton: true, className: 'dark-map-popup' })
+          .setLngLat([targetLon, targetLat])
+          .setDOMContent(popupNode)
+          .addTo(map)
+
+        issuePopupRef.current = popup
+
+        const btnStress = popupNode.querySelector('#popup-stress-btn')
+        if (btnStress && onSimulateIntersection && targetNodeId) {
+          btnStress.onclick = () => {
+            onSimulateIntersection({
+              node_id: targetNodeId,
+              lat: targetLat,
+              lon: targetLon,
+              is_signal: true,
+              street_count: 4,
+            })
+          }
+        }
+
+        const btnSandbox = popupNode.querySelector('#popup-sandbox-btn')
+        if (btnSandbox && onSelectNode && targetNodeId) {
+          btnSandbox.onclick = () => {
+            onSelectNode({
+              node_id: targetNodeId,
+              osmid: targetNodeId,
+              lat: targetLat,
+              lon: targetLon,
+              is_signal: true,
+            })
+          }
+        }
+      }).catch(err => console.warn('Could not render issue popup:', err))
     }
   }, [selectedIssue, mapReady])
 

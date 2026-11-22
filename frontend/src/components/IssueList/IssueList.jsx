@@ -12,7 +12,13 @@ const TYPE_ICONS = {
   lane_utilization:    '🛣️',
 }
 
-export default function IssueList({ issues, selectedIssue, onSelectIssue }) {
+export default function IssueList({
+  issues,
+  selectedIssue,
+  onSelectIssue,
+  onSimulateIntersection,
+  onSelectNode,
+}) {
   const [filter, setFilter] = useState('all')   // 'all' | 'severe' | 'moderate' | 'low'
   const [typeFilter, setTypeFilter] = useState('all')
 
@@ -60,8 +66,10 @@ export default function IssueList({ issues, selectedIssue, onSelectIssue }) {
           <IssueItem
             key={issue.issue_id || issue.id}
             issue={issue}
-            isSelected={selectedIssue?.issue_id === issue.issue_id}
+            isSelected={selectedIssue?.issue_id === issue.issue_id || selectedIssue?.id === issue.id}
             onSelect={() => onSelectIssue(issue)}
+            onSimulateIntersection={onSimulateIntersection}
+            onSelectNode={onSelectNode}
           />
         ))}
       </div>
@@ -124,7 +132,7 @@ function buildSummary(issue) {
   return issue.description?.slice(0, 90) || 'No details available'
 }
 
-function IssueItem({ issue, isSelected, onSelect }) {
+function IssueItem({ issue, isSelected, onSelect, onSimulateIntersection, onSelectNode }) {
   const severityClass = {
     severe:   'badge-severe',
     moderate: 'badge-moderate',
@@ -135,6 +143,11 @@ function IssueItem({ issue, isSelected, onSelect }) {
   const loc  = issue.location || {}
   const locStr = formatLocation(issue)
   const summary = buildSummary(issue)
+
+  // Target node for micro-simulation & sandbox actions
+  const targetNodeId = String(
+    loc.node_u || loc.node_id || (loc.edge_id ? loc.edge_id.split('_')[0] : '')
+  )
 
   // Occupancy bar — only for congestion issues
   const occupancy = m.occupancy != null ? Number(m.occupancy) : null
@@ -147,6 +160,12 @@ function IssueItem({ issue, isSelected, onSelect }) {
       role="button"
       tabIndex={0}
       onKeyDown={e => e.key === 'Enter' && onSelect()}
+      style={{
+        cursor: 'pointer',
+        transition: 'all 0.18s ease',
+        border: isSelected ? '1.5px solid #38bdf8' : undefined,
+        boxShadow: isSelected ? '0 0 14px rgba(56, 189, 248, 0.25)' : undefined,
+      }}
     >
       {/* Header row: type + severity badge */}
       <div className="flex items-center justify-between gap-2" style={{ marginBottom: 4 }}>
@@ -209,6 +228,137 @@ function IssueItem({ issue, isSelected, onSelect }) {
           <MetricPill label="Avg Wait" value={`${Number(m.avg_wait_time).toFixed(0)}s`} />
         )}
       </div>
+
+      {/* Active Selection Action Drawer */}
+      {isSelected && (
+        <div
+          className="issue-action-drawer"
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10.5,
+              color: '#38bdf8',
+              fontWeight: 700,
+              letterSpacing: '0.3px',
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: '#38bdf8',
+                boxShadow: '0 0 8px #38bdf8',
+                display: 'inline-block',
+              }}
+            />
+            FOCUSED ON ROAD SEGMENT IN MAP
+          </div>
+
+          {/* AI Solution Advice */}
+          <div
+            style={{
+              fontSize: 11,
+              lineHeight: 1.45,
+              color: '#cbd5e1',
+              background: 'rgba(15, 23, 42, 0.65)',
+              padding: '7px 10px',
+              borderRadius: 6,
+              borderLeft: '2.5px solid #38bdf8',
+            }}
+          >
+            {issue.description || 'Congestion bottleneck detected on corridor. Recommend upstream signal timing adjustment or vehicle diversion.'}
+          </div>
+
+          {/* Quick Action Buttons */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {targetNodeId && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (onSimulateIntersection) {
+                    onSimulateIntersection({
+                      node_id: targetNodeId,
+                      lat: loc.lat || 0,
+                      lon: loc.lon || 0,
+                      is_signal: true,
+                      street_count: m.street_count || 4,
+                    })
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: 120,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4,
+                  padding: '6px 8px',
+                  background: 'rgba(239, 68, 68, 0.22)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  borderRadius: 6,
+                  color: '#fca5a5',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+                title={`Run progressive vehicle flow stress test on Node ${targetNodeId}`}
+              >
+                ⚡ Stress Test Node #{targetNodeId}
+              </button>
+            )}
+
+            {targetNodeId && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (onSelectNode) {
+                    onSelectNode({
+                      node_id: targetNodeId,
+                      osmid: targetNodeId,
+                      lat: loc.lat || 0,
+                      lon: loc.lon || 0,
+                      is_signal: true,
+                    })
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: 120,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4,
+                  padding: '6px 8px',
+                  background: 'rgba(56, 189, 248, 0.22)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  borderRadius: 6,
+                  color: '#7dd3fc',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+                title={`Open Node ${targetNodeId} in Signal Sandbox to tune timings`}
+              >
+                🛠️ Open in Sandbox
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

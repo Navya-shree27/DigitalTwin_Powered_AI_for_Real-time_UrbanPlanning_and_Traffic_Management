@@ -598,6 +598,12 @@ export default function Dashboard() {
                 issues={issues}
                 selectedIssue={selectedIssue}
                 onSelectIssue={setSelectedIssue}
+                onSimulateIntersection={(node) => setIntersectionSimNode(node)}
+                onSelectNode={(node) => {
+                  setSelectedNode(node)
+                  setEditMode(true)
+                  setRightSidebarOpen(true)
+                }}
               />
             </div>
           )}
