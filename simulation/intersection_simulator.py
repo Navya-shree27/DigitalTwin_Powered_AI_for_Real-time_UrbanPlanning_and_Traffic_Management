@@ -109,46 +109,90 @@ def _analytic_model(
     total_pce = cars + (bikes * 0.5) + (autos * 0.75) + (trucks * 2.0) + (buses * 2.5)
     total_veh = cars + bikes + autos + trucks + buses
 
+    duration_hours = max(float(duration_s), 10.0) / 3600.0
+    hourly_flow = total_pce / duration_hours
+
     approaches = max(2, min(street_count, 6))
 
     if is_signal:
-        cycle_s = green_s + amber_s + red_s
+        cycle_s = max(green_s + amber_s + red_s, 10)
         sat_flow = 1800.0
-        flow_per_approach = (total_pce / max(duration_s / 3600.0, 1)) / max(approaches / 2.0, 1.0)
-        capacity_per_approach = sat_flow * (green_s / cycle_s)
+        # Approach legs share cycle capacity
+        flow_per_approach = hourly_flow / float(approaches)
+        capacity_per_approach = sat_flow * (green_s / float(cycle_s))
 
         x = flow_per_approach / max(capacity_per_approach, 1.0)
-        x = min(x, 0.99)
-
-        g_over_c = green_s / cycle_s
+        g_over_c = green_s / float(cycle_s)
         q_pcu_per_s = max(flow_per_approach / 3600.0, 0.0001)
 
-        d1 = 0.5 * cycle_s * (1 - g_over_c) ** 2 / max(1 - x * g_over_c, 0.01)
-        d2 = x ** 2 / (2 * q_pcu_per_s * max(1 - x, 0.01))
-        delay_s = round(d1 + d2, 2)
-        throughput_pce = int(min(total_pce, capacity_per_approach * (approaches / 2.0) * (duration_s / 3600.0)))
-        avg_queue = round(q_pcu_per_s * delay_s, 1)
+        if x <= 0.95:
+            d1 = 0.5 * cycle_s * (1 - g_over_c) ** 2 / max(1 - x * g_over_c, 0.01)
+            d2 = x ** 2 / (2 * q_pcu_per_s * max(1 - x, 0.01))
+            delay_s = round(d1 + d2, 2)
+        else:
+            # Over-saturation overflow delay (HCM 2010 Akçelik)
+            d1 = 0.5 * cycle_s * (1 - g_over_c) ** 2 / max(1 - 0.95 * g_over_c, 0.01)
+            term = (x - 1.0) + math.sqrt(max((x - 1.0) ** 2 + (8.0 * 0.5 * x) / (capacity_per_approach * duration_hours), 0.0))
+            d2 = 900.0 * duration_hours * term
+            delay_s = round(min(d1 + d2, 300.0), 2)
+
+        total_capacity_hourly = capacity_per_approach * approaches
+        throughput_pce = int(min(total_pce, total_capacity_hourly * duration_hours))
+        avg_queue = round(min(q_pcu_per_s * delay_s, total_pce / approaches), 1)
         green_util = round(min(x * 100, 100), 1)
-        collision_prob = round(min(0.05 + 0.15 * x, 0.95), 3)
+        collision_prob = round(min(0.05 + 0.15 * min(x, 2.0), 0.95), 3)
         interpretation = _interpret(delay_s, x, green_util, is_signal=True)
     else:
-        # Unsignalized junction
+        # Unsignalized Priority Intersection (HCM 2010 Chapter 19/20 Gap Acceptance)
         cycle_s = 0
-        hourly_flow = total_pce / max(duration_s / 3600.0, 1)
-        major_flow = hourly_flow * 0.65
-        minor_flow = hourly_flow * 0.35 / max(approaches - 2, 1)
+        major_approaches = 2
+        minor_approaches = max(approaches - major_approaches, 1)
 
-        # Gap acceptance capacity
-        q_maj_s = (major_flow / 2.0) / 3600.0
-        cap_minor = max((major_flow / 2.0) * (math.exp(-q_maj_s * 5.0) / max(1.0 - math.exp(-q_maj_s * 3.0), 0.05)), 60.0)
+        major_flow_total = hourly_flow * 0.65
+        minor_flow_total = hourly_flow * 0.35
+        major_flow_per_app = major_flow_total / major_approaches
+        minor_flow_per_app = minor_flow_total / minor_approaches
 
-        x = min(minor_flow / cap_minor, 1.5)
-        delay_s = round((3600.0 / cap_minor) + (x / max(1.0 - min(x, 0.95), 0.05)) * 4.0, 2)
-        avg_queue = round((minor_flow / 3600.0) * delay_s, 1)
-        throughput_pce = int(min(total_pce, (major_flow + cap_minor) * (duration_s / 3600.0)))
+        # Minor street vehicles must yield and find critical headway gaps (tc = 5.0s, tf = 3.0s) in major stream
+        q_maj_s = major_flow_per_app / 3600.0
+        tc = 5.0  # critical gap (seconds)
+        tf = 3.0  # follow-up gap (seconds)
+
+        if q_maj_s > 0:
+            p_gap = math.exp(-q_maj_s * tc)
+            p_follow = max(1.0 - math.exp(-q_maj_s * tf), 0.04)
+            cap_minor_per_app = max(major_flow_per_app * (p_gap / p_follow), 50.0)
+        else:
+            cap_minor_per_app = 1200.0
+
+        x = minor_flow_per_app / max(cap_minor_per_app, 1.0)
+
+        if x <= 0.95:
+            # Under-capacity queuing delay
+            delay_s = round((3600.0 / cap_minor_per_app) + (x / max(1.0 - x, 0.05)) * 4.0, 2)
+        else:
+            # Severe over-saturation accumulation delay
+            base_d = 3600.0 / cap_minor_per_app
+            term = (x - 1.0) + math.sqrt(max((x - 1.0) ** 2 + (8.0 * x) / (cap_minor_per_app * duration_hours), 0.0))
+            overflow_d = 900.0 * duration_hours * term
+            delay_s = round(min(base_d + overflow_d, 300.0), 2)
+
+        # Queue accumulation
+        if x > 1.0:
+            accumulated_queue = (minor_flow_per_app - cap_minor_per_app) * duration_hours
+            avg_queue = round(max((minor_flow_per_app / 3600.0) * delay_s, accumulated_queue / 2.0), 1)
+        else:
+            avg_queue = round((minor_flow_per_app / 3600.0) * delay_s, 1)
+
+        # Discharged throughput in duration window
+        major_capacity_total = 1800.0 * major_approaches
+        major_discharged = min(major_flow_total, major_capacity_total) * duration_hours
+        minor_discharged = min(minor_flow_total, cap_minor_per_app * minor_approaches) * duration_hours
+        throughput_pce = int(min(total_pce, major_discharged + minor_discharged))
+
         green_util = 0.0
-        conflict_index = (major_flow * minor_flow) / 150000.0
-        collision_prob = round(min(0.15 + conflict_index * 0.35, 0.98), 3)
+        conflict_index = (major_flow_total * minor_flow_total) / 150000.0
+        collision_prob = round(min(0.15 + conflict_index * 0.15 + min(x * 0.25, 0.55), 0.98), 3)
         interpretation = _interpret(delay_s, x, green_util, is_signal=False, conflict_index=conflict_index)
 
     emissions = round(total_pce * delay_s * 0.03, 2)
@@ -182,21 +226,21 @@ def _analytic_model(
 
 def _interpret(delay_s: float, x: float, green_util: float, is_signal: bool = True, conflict_index: float = 0.0) -> str:
     if not is_signal:
-        if conflict_index > 2.0 or delay_s > 45.0:
-            return "HAZARDOUS: High crossing conflict and collision risk without signal protection. Installing a traffic signal is strongly warranted."
-        if x > 0.8:
-            return "WARNING: Minor street vehicles experiencing severe delay waiting for gaps in major flow."
-        return "ACCEPTABLE: Unsignalized priority junction handling current traffic volume with adequate gap acceptance."
+        if x >= 1.0 or delay_s >= 50.0 or conflict_index > 2.0:
+            return f"CRITICAL BREAKDOWN: Severe over-saturation (v/c = {x:.2f}). Minor approaches cannot find safe crossing gaps in the heavy major stream. Installing a multi-phase traffic signal is urgently required to prevent severe collisions and gridlock."
+        if x > 0.75 or delay_s > 30.0:
+            return f"WARNING: High crossing conflict (v/c = {x:.2f}). Minor street vehicles experiencing extended delays waiting for gaps. Signalization recommended."
+        return f"ACCEPTABLE: Unsignalized priority junction operating within capacity (v/c = {x:.2f}) with adequate gap acceptance."
 
-    if x > 0.9:
-        return "CRITICAL: Intersection is over-saturated. Increase green capacity or redistribute traffic."
-    if x > 0.75:
-        return "WARNING: High saturation. Consider extending green phase or adding a lane."
+    if x >= 1.0 or delay_s >= 80.0:
+        return f"CRITICAL BREAKDOWN: Intersection is over-saturated (v/c = {x:.2f}, delay {delay_s:.1f}s). Demand exceeds approach discharge capacity. Increase cycle length, add green time, or provide additional turning lanes."
+    if x > 0.8:
+        return f"WARNING: High saturation (v/c = {x:.2f}). Approaching capacity limit. Consider extending green phase or reallocating cycle splits."
     if delay_s > 60:
-        return "HIGH DELAY: Average wait exceeds 1 minute. Signal timing needs optimization."
-    if green_util < 40:
-        return "UNDERLOADED: Green phase is barely used. Signal may be removable or replaced with yield control."
-    return "ACCEPTABLE: Intersection operating within normal parameters."
+        return f"HIGH DELAY: Average wait exceeds 1 minute ({delay_s:.1f}s). Signal phase timing requires re-coordination."
+    if green_util < 35:
+        return f"UNDERLOADED: Green phase is underutilized ({green_util:.0f}%). Signal may be removable or replaced with actuated/priority control."
+    return f"ACCEPTABLE: Intersection operating within normal parameters (v/c = {x:.2f}, wait {delay_s:.1f}s)."
 
 
 # ── SUMO-based simulation ─────────────────────────────────────────────────────
