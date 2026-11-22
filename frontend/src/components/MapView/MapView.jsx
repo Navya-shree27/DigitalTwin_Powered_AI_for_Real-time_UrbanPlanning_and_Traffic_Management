@@ -1656,28 +1656,16 @@ export default function MapView({
           </div>
 
           {/* Interactive Layer Toggles: Traffic Congestion, Collision Hazards, Signals */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+          <div className="map-layer-toggles">
             <button
               type="button"
               onClick={() => setShowCongestionLayer(prev => !prev)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 20,
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                background: showCongestionLayer ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 0, 0, 0.6)',
-                border: showCongestionLayer ? '1px solid #ef4444' : '1px solid rgba(255, 255, 255, 0.15)',
-                color: showCongestionLayer ? '#fca5a5' : 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-              title="Toggle Traffic Congestion Visualization"
+              className={`layer-toggle-btn ${showCongestionLayer ? 'congestion-active' : ''}`}
+              title="Toggle Traffic Congestion Layer"
             >
               <span>🔴 Traffic Congestion</span>
               {congestedCount > 0 && (
-                <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
+                <span className={`layer-toggle-badge ${showCongestionLayer ? 'red' : 'gray'}`}>
                   {congestedCount}
                 </span>
               )}
@@ -1686,24 +1674,12 @@ export default function MapView({
             <button
               type="button"
               onClick={() => setShowHazardLayer(prev => !prev)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 20,
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                background: showHazardLayer ? 'rgba(249, 115, 22, 0.25)' : 'rgba(0, 0, 0, 0.6)',
-                border: showHazardLayer ? '1px solid #f97316' : '1px solid rgba(255, 255, 255, 0.15)',
-                color: showHazardLayer ? '#fdba74' : 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
+              className={`layer-toggle-btn ${showHazardLayer ? 'hazards-active' : ''}`}
               title="Toggle Collision Hazard Blackspots"
             >
               <span>⚠️ Collision Hazards</span>
               {hazardCount > 0 && (
-                <span style={{ background: '#f97316', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
+                <span className={`layer-toggle-badge ${showHazardLayer ? 'orange' : 'gray'}`}>
                   {hazardCount}
                 </span>
               )}
@@ -1712,19 +1688,10 @@ export default function MapView({
             <button
               type="button"
               onClick={() => setShowSignalsLayer(prev => !prev)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 20,
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                background: showSignalsLayer ? 'rgba(59, 130, 246, 0.25)' : 'rgba(0, 0, 0, 0.6)',
-                border: showSignalsLayer ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-                color: showSignalsLayer ? '#93c5fd' : 'var(--text-muted)',
-              }}
+              className={`layer-toggle-btn ${showSignalsLayer ? 'signals-active' : ''}`}
               title="Toggle Traffic Signals Layer"
             >
-              🚦 Signals
+              <span>🚦 Signals</span>
             </button>
           </div>
         </div>
